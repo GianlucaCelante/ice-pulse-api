@@ -1,7 +1,8 @@
 pipeline {
   agent {
     kubernetes {
-      inheritFrom 'jnlp-agent'
+      inheritFrom 'jnlp-agent'      // Name del Template
+      label 'k8s-agent'             // Label esattamente come da Pod Template
       defaultContainer 'jnlp'
     }
   }
