@@ -1,6 +1,10 @@
 pipeline {
-  agent any
-
+  agent {
+    kubernetes {
+      inheritFrom 'jnlp-agent'
+      defaultContainer 'jnlp'
+    }
+  }
   environment {
     DOCKER_REGISTRY     = 'docker.io/aipioppi'
     INFRA_REPO_URL      = 'git@github.com:GianlucaCelante/ice-pulse-infra.git'
