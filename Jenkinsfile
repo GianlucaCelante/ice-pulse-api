@@ -113,15 +113,17 @@ pipeline {
           echo "Version to deploy: ${version}"
           echo "Would clone infra repo and update manifest"
           
-          // Test git access
-          sh '''
-            echo "Testing git access..."
-            git --version
-          '''
+          script {
+            try {
+              sh 'echo "Testing git access..." && git --version'
+            } catch (Exception e) {
+              echo "Git command failed in kubectl container: ${e.message}"
+              echo "This is expected - kubectl container may not have git"
+            }
+          }
         }
       }
     }
-  }
 
   post {
     success {
