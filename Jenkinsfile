@@ -267,16 +267,13 @@ pipeline {
 
   post {
     success {
-      echo "✅ Pipeline completed successfully for branch ${env.BRANCH_NAME}"
-      echo "Version: ${version}"
-      when {
-        anyOf {
-          branch 'release-dev'
-          branch 'release'
-          branch 'release-hv'
+      script {
+        echo "✅ Pipeline completed successfully for branch ${env.BRANCH_NAME}"
+        echo "Version: ${version}"
+        if (env.BRANCH_NAME in ['release-dev', 'release', 'release-hv']) {
+          echo "🚀 Deployment manifest updated in infra repository"
         }
       }
-      echo "🚀 Deployment manifest updated in infra repository"
     }
     failure {
       echo "❌ Pipeline failed for branch ${env.BRANCH_NAME}"
