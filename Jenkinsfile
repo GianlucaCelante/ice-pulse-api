@@ -99,6 +99,7 @@ pipeline {
     stage('Read Version') {
       steps {
         script {
+          // Definisci come variabile globale (senza def)
           version = readFile('VERSION').trim()
           echo "Version: ${version}"
         }
@@ -130,7 +131,7 @@ pipeline {
             dir(INFRA_CLONE_DIR) {
               git url: INFRA_REPO_URL, branch: INFRA_BRANCH, credentialsId: CREDENTIALS_GIT_INFRA
               
-              sh '''
+              sh """
                 echo "=== Repository cloned ==="
                 ls -la
                 
@@ -144,9 +145,6 @@ pipeline {
                 cat devops/dev/ice-pulse-api-deployment.yaml
                 
                 echo "=== Updating image version ==="
-              '''
-              
-              sh """
                 yq e -i '.spec.template.spec.containers[0].image = "${DOCKER_REGISTRY}/ice-pulse-api:${version}"' ${DEPLOY_PATH_DEV}
                 
                 echo "=== Updated deployment file ==="
