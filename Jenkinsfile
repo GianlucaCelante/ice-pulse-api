@@ -77,7 +77,7 @@ pipeline {
     DEPLOY_PATH_DEV     = 'devops/dev/ice-pulse-api-deployment.yaml'
     DEPLOY_PATH_STAGING = 'devops/staging/ice-pulse-api-deployment.yaml'
     DEPLOY_PATH_PROD    = 'devops/prod/ice-pulse-api-deployment.yaml'
-    CREDENTIALS_GIT     = 'ice-pulse-api-deploy-key'
+    CREDENTIALS_GIT     = 'jenkins-deploy-api-ed25519'
     CREDENTIALS_DOCKER  = 'docker-creds'
     KUBECONFIG_CRED     = 'kubeconfig'
   }
