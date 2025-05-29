@@ -123,15 +123,23 @@ pipeline {
       when { branch 'release-dev' }
       steps {
         container('tools') {
-          script {
-            echo "=== Deploy to Dev ==="
-            echo "Version to deploy: ${version}"
-            
-            // Clone infra repository
-            dir(INFRA_CLONE_DIR) {
-              git url: INFRA_REPO_URL, branch: INFRA_BRANCH, credentialsId: CREDENTIALS_GIT_INFRA
+          withCredentials([sshUserPrivateKey(credentialsId: CREDENTIALS_GIT_INFRA, keyFileVariable: 'SSH_KEY')]) {
+            script {
+              echo "=== Deploy to Dev ==="
+              echo "Version to deploy: ${version}"
               
               sh """
+                echo "=== Setting up SSH ==="
+                mkdir -p ~/.ssh
+                cp \$SSH_KEY ~/.ssh/id_rsa
+                chmod 600 ~/.ssh/id_rsa
+                ssh-keyscan github.com >> ~/.ssh/known_hosts
+                
+                echo "=== Cloning infra repository ==="
+                git clone ${INFRA_REPO_URL} ${INFRA_CLONE_DIR}
+                cd ${INFRA_CLONE_DIR}
+                git checkout ${INFRA_BRANCH}
+                
                 echo "=== Repository cloned ==="
                 ls -la
                 
@@ -142,7 +150,7 @@ pipeline {
                 yq --version
                 
                 echo "=== Current deployment file ==="
-                cat devops/dev/ice-pulse-api-deployment.yaml
+                cat ${DEPLOY_PATH_DEV}
                 
                 echo "=== Updating image version ==="
                 yq e -i '.spec.template.spec.containers[0].image = "${DOCKER_REGISTRY}/ice-pulse-api:${version}"' ${DEPLOY_PATH_DEV}
