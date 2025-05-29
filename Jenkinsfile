@@ -41,6 +41,18 @@ pipeline {
               limits:
                 memory: "128Mi"
                 cpu: "100m"
+          - name: tools
+            image: alpine/git:latest
+            command:
+            - cat
+            tty: true
+            resources:
+              requests:
+                memory: "64Mi"
+                cpu: "50m"
+              limits:
+                memory: "128Mi"
+                cpu: "100m"
       """
     }
   }
@@ -53,7 +65,8 @@ pipeline {
     DEPLOY_PATH_DEV     = 'devops/dev/ice-pulse-api-deployment.yaml'
     DEPLOY_PATH_STAGING = 'devops/staging/ice-pulse-api-deployment.yaml'
     DEPLOY_PATH_PROD    = 'devops/prod/ice-pulse-api-deployment.yaml'
-    CREDENTIALS_GIT     = 'ice-pulse-api-deploy-key'
+    CREDENTIALS_GIT_API = 'ice-pulse-api-deploy-key'
+    CREDENTIALS_GIT_INFRA = 'ice-pulse-infra-deploy-key'
     CREDENTIALS_DOCKER  = 'docker-creds'
     KUBECONFIG_CRED     = 'kubeconfig'
   }
@@ -108,17 +121,143 @@ pipeline {
     stage('Deploy to Dev') {
       when { branch 'release-dev' }
       steps {
+        container('tools') {
+          script {
+            echo "=== Deploy to Dev ==="
+            echo "Version to deploy: ${version}"
+            
+            // Clone infra repository
+            dir(INFRA_CLONE_DIR) {
+              git url: INFRA_REPO_URL, branch: INFRA_BRANCH, credentialsId: CREDENTIALS_GIT_INFRA
+              
+              sh '''
+                echo "=== Repository cloned ==="
+                ls -la
+                
+                echo "=== Installing yq ==="
+                apk add --no-cache curl
+                curl -L https://github.com/mikefarah/yq/releases/download/v4.30.8/yq_linux_amd64 -o /usr/local/bin/yq
+                chmod +x /usr/local/bin/yq
+                yq --version
+                
+                echo "=== Current deployment file ==="
+                cat devops/dev/ice-pulse-api-deployment.yaml
+                
+                echo "=== Updating image version ==="
+              '''
+              
+              sh """
+                cd ${INFRA_CLONE_DIR}
+                yq e -i '.spec.template.spec.containers[0].image = "${DOCKER_REGISTRY}/ice-pulse-api:${version}"' ${DEPLOY_PATH_DEV}
+                
+                echo "=== Updated deployment file ==="
+                cat ${DEPLOY_PATH_DEV}
+                
+                echo "=== Git configuration ==="
+                git config user.email "ci@jenkins.local"
+                git config user.name "Jenkins CI"
+                
+                echo "=== Git status ==="
+                git status
+                
+                echo "=== Committing changes ==="
+                git add .
+                git commit -m "ci: deploy ice-pulse-api:${version} to dev" || echo "No changes to commit"
+                
+                echo "=== Pushing to remote ==="
+                git push origin ${INFRA_BRANCH}
+                
+                echo "=== Deploy completed ==="
+              """
+            }
+          }
+        }
+      }
+    }
+
+    stage('Promote to Staging') {
+      when { branch 'release' }
+      steps {
+        container('tools') {
+          script {
+            echo "=== Promote to Staging ==="
+            echo "Version to deploy: ${version}"
+            
+            dir(INFRA_CLONE_DIR) {
+              git url: INFRA_REPO_URL, branch: INFRA_BRANCH, credentialsId: CREDENTIALS_GIT_INFRA
+              
+              sh """
+                apk add --no-cache curl
+                curl -L https://github.com/mikefarah/yq/releases/download/v4.30.8/yq_linux_amd64 -o /usr/local/bin/yq
+                chmod +x /usr/local/bin/yq
+                
+                yq e -i '.spec.template.spec.containers[0].image = "${DOCKER_REGISTRY}/ice-pulse-api:${version}"' ${DEPLOY_PATH_STAGING}
+                
+                git config user.email "ci@jenkins.local"
+                git config user.name "Jenkins CI"
+                
+                git tag staging-v${version}
+                git add .
+                git commit -m "ci: deploy ice-pulse-api:${version} to staging" || echo "No changes to commit"
+                git push origin ${INFRA_BRANCH} --tags
+              """
+            }
+          }
+        }
+      }
+    }
+
+    stage('Promote to Prod') {
+      when { branch 'release-hv' }
+      steps {
+        container('tools') {
+          script {
+            echo "=== Promote to Production ==="
+            echo "Version to deploy: ${version}"
+            
+            dir(INFRA_CLONE_DIR) {
+              git url: INFRA_REPO_URL, branch: INFRA_BRANCH, credentialsId: CREDENTIALS_GIT_INFRA
+              
+              sh """
+                apk add --no-cache curl
+                curl -L https://github.com/mikefarah/yq/releases/download/v4.30.8/yq_linux_amd64 -o /usr/local/bin/yq
+                chmod +x /usr/local/bin/yq
+                
+                yq e -i '.spec.template.spec.containers[0].image = "${DOCKER_REGISTRY}/ice-pulse-api:${version}"' ${DEPLOY_PATH_PROD}
+                
+                git config user.email "ci@jenkins.local"
+                git config user.name "Jenkins CI"
+                
+                git tag prod-v${version}
+                git add .
+                git commit -m "ci: deploy ice-pulse-api:${version} to prod" || echo "No changes to commit"
+                git push origin ${INFRA_BRANCH} --tags
+              """
+            }
+          }
+        }
+      }
+    }
+
+    stage('Trigger ArgoCD Refresh') {
+      when {
+        anyOf {
+          branch 'release-dev'
+          branch 'release'
+          branch 'release-hv'
+        }
+      }
+      steps {
         container('kubectl') {
-          echo "=== Deploy to Dev ==="
-          echo "Version to deploy: ${version}"
-          echo "Would clone infra repo and update manifest"
-          
           script {
             try {
-              sh 'echo "Testing git access..." && git --version'
+              withCredentials([file(credentialsId: KUBECONFIG_CRED, variable: 'KUBECONFIG')]) {
+                sh 'kubectl annotate applicationsets.argoproj.io ice-pulse-all-envs -n argocd argocd.argoproj.io/refresh="hard" --overwrite'
+                echo "ArgoCD refresh triggered successfully"
+              }
             } catch (Exception e) {
-              echo "Git command failed in kubectl container: ${e.message}"
-              echo "This is expected - kubectl container may not have git"
+              echo "ArgoCD refresh failed (kubeconfig not configured): ${e.message}"
+              echo "This is optional - deploy will still work via ArgoCD polling"
             }
           }
         }
@@ -130,6 +269,14 @@ pipeline {
     success {
       echo "✅ Pipeline completed successfully for branch ${env.BRANCH_NAME}"
       echo "Version: ${version}"
+      when {
+        anyOf {
+          branch 'release-dev'
+          branch 'release'
+          branch 'release-hv'
+        }
+      }
+      echo "🚀 Deployment manifest updated in infra repository"
     }
     failure {
       echo "❌ Pipeline failed for branch ${env.BRANCH_NAME}"
