@@ -84,3 +84,31 @@ helm/hub-central/*.lock
 # Kubernetes credential file
 kubeconfig
 
+# ===== CREDENZIALI E SEGRETI =====
+# File con credenziali reali - NON DEVONO MAI ESSERE VERSIONATI
+*-secrets-local.yaml
+*-secrets-prod.yaml
+*-secrets-staging.yaml
+*-secrets-dev.yaml
+*.secret
+*.key
+*.pem
+.secrets/
+secrets/
+
+# SSH Keys per Git
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+deploy_key*
+
+# Jenkins credentials files
+jenkins-credentials.xml
+jenkins-secrets/
+
+# File di configurazione con credenziali
+config-local.yaml
+config-prod.yaml
+kubeconfig*
+.kube/
