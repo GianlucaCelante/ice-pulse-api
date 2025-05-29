@@ -8,7 +8,7 @@ pipeline {
   }
   environment {
     DOCKER_REGISTRY     = 'docker.io/aipioppi'
-    INFRA_REPO_URL      = 'https://github.com/GianlucaCelante/ice-pulse-infra.git'
+    INFRA_REPO_URL      = 'git@github.com:GianlucaCelante/ice-pulse-infra.git'
     INFRA_BRANCH        = 'master'
     INFRA_CLONE_DIR     = 'infra'
     DEPLOY_PATH_DEV     = 'devops/dev/ice-pulse-api-deployment.yaml'
