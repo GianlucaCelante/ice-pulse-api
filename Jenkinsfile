@@ -29,20 +29,6 @@ pipeline {
               limits:
                 memory: "256Mi"
                 cpu: "100m"
-          - name: docker
-            image: docker:20.10-dind
-            securityContext:
-              privileged: true
-            volumeMounts:
-            - name: docker-sock
-              mountPath: /var/run/docker.sock
-            resources:
-              requests:
-                memory: "256Mi"
-                cpu: "100m"
-              limits:
-                memory: "512Mi"
-                cpu: "200m"
           - name: kubectl
             image: bitnami/kubectl:latest
             command:
@@ -67,10 +53,6 @@ pipeline {
               limits:
                 memory: "128Mi"
                 cpu: "100m"
-          volumes:
-          - name: docker-sock
-            hostPath:
-              path: /var/run/docker.sock
       """
     }
   }
@@ -138,7 +120,7 @@ pipeline {
       }
     }
 
-    stage('Build & Push Docker Image') {
+    stage('Build & Push Docker Image - DISABLED') {
       when {
         anyOf {
           branch 'release-dev'
@@ -147,31 +129,11 @@ pipeline {
         }
       }
       steps {
-        container('docker') {
-          withCredentials([usernamePassword(credentialsId: CREDENTIALS_DOCKER, passwordVariable: 'DOCKER_PASSWORD', usernameVariable: 'DOCKER_USERNAME')]) {
-            script {
-              sh """
-                echo "=== Docker Build & Push ==="
-                echo "Building image: ${DOCKER_REGISTRY}/ice-pulse-api:${version}"
-                
-                # Login to Docker Hub
-                echo \$DOCKER_PASSWORD | docker login -u \$DOCKER_USERNAME --password-stdin
-                
-                # Build image (assuming Dockerfile exists)
-                docker build -t ${DOCKER_REGISTRY}/ice-pulse-api:${version} .
-                
-                # Tag as latest for the environment
-                docker tag ${DOCKER_REGISTRY}/ice-pulse-api:${version} ${DOCKER_REGISTRY}/ice-pulse-api:latest-${env.BRANCH_NAME}
-                
-                # Push both tags
-                docker push ${DOCKER_REGISTRY}/ice-pulse-api:${version}
-                docker push ${DOCKER_REGISTRY}/ice-pulse-api:latest-${env.BRANCH_NAME}
-                
-                echo "=== Docker push completed ==="
-                docker logout
-              """
-            }
-          }
+        script {
+          echo "=== Docker Build Temporarily Disabled ==="
+          echo "Docker container has conflicts in this Kubernetes setup"
+          echo "Image will use existing: ${DOCKER_REGISTRY}/ice-pulse-api:${version}"
+          echo "This stage will be re-enabled in the GitHub Actions migration"
         }
       }
     }
