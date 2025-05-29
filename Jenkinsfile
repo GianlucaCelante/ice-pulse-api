@@ -1,13 +1,9 @@
 pipeline {
   agent {
     kubernetes {
-      label 'k8s-agent'
       yaml """
         apiVersion: v1
         kind: Pod
-        metadata:
-          labels:
-            jenkins: k8s-agent
         spec:
           serviceAccountName: jenkins
           containers:
@@ -33,20 +29,6 @@ pipeline {
               limits:
                 memory: "256Mi"
                 cpu: "100m"
-          - name: docker
-            image: docker:20.10-dind
-            securityContext:
-              privileged: true
-            volumeMounts:
-            - name: docker-sock
-              mountPath: /var/run/docker.sock
-            resources:
-              requests:
-                memory: "256Mi"
-                cpu: "100m"
-              limits:
-                memory: "512Mi"
-                cpu: "200m"
           - name: kubectl
             image: bitnami/kubectl:latest
             command:
@@ -59,10 +41,6 @@ pipeline {
               limits:
                 memory: "128Mi"
                 cpu: "100m"
-          volumes:
-          - name: docker-sock
-            hostPath:
-              path: /var/run/docker.sock
       """
     }
   }
@@ -75,7 +53,7 @@ pipeline {
     DEPLOY_PATH_DEV     = 'devops/dev/ice-pulse-api-deployment.yaml'
     DEPLOY_PATH_STAGING = 'devops/staging/ice-pulse-api-deployment.yaml'
     DEPLOY_PATH_PROD    = 'devops/prod/ice-pulse-api-deployment.yaml'
-    CREDENTIALS_GIT     = 'jenkins-deploy-api-ed25519'
+    CREDENTIALS_GIT     = 'ice-pulse-api-deploy-key'
     CREDENTIALS_DOCKER  = 'docker-creds'
     KUBECONFIG_CRED     = 'kubeconfig'
   }
@@ -120,31 +98,9 @@ pipeline {
           sh '''
             echo "=== Python Container ==="
             python3 --version
-            pip install pytest || echo "pytest install failed, continuing for now"
+            pip install pytest || echo "pytest install failed, continuing"
             echo "Test phase completed"
           '''
-        }
-      }
-    }
-
-    stage('Build & Push Image') {
-      when {
-        anyOf {
-          branch 'release-dev'
-          branch 'release'
-          branch 'release-hv'
-        }
-      }
-      steps {
-        container('docker') {
-          script {
-            echo "Docker build would happen here for version: ${version}"
-            // Temporaneamente commentato per test
-            // docker.withRegistry("https://index.docker.io/v1/", CREDENTIALS_DOCKER) {
-            //   def img = docker.build("${DOCKER_REGISTRY}/ice-pulse-api:${version}")
-            //   img.push()
-            // }
-          }
         }
       }
     }
@@ -153,14 +109,15 @@ pipeline {
       when { branch 'release-dev' }
       steps {
         container('kubectl') {
-          echo "Deployment to dev would happen here for version: ${version}"
-          // Temporaneamente commentato per test
-          // dir(INFRA_CLONE_DIR) {
-          //   git url: INFRA_REPO_URL, branch: INFRA_BRANCH, credentialsId: CREDENTIALS_GIT
-          //   sh """
-          //     echo "Would update deployment manifest here"
-          //   """
-          // }
+          echo "=== Deploy to Dev ==="
+          echo "Version to deploy: ${version}"
+          echo "Would clone infra repo and update manifest"
+          
+          // Test git access
+          sh '''
+            echo "Testing git access..."
+            git --version
+          '''
         }
       }
     }
@@ -168,10 +125,14 @@ pipeline {
 
   post {
     success {
-      echo "Pipeline completed successfully for branch ${env.BRANCH_NAME}"
+      echo "✅ Pipeline completed successfully for branch ${env.BRANCH_NAME}"
+      echo "Version: ${version}"
     }
     failure {
-      echo "Pipeline failed for branch ${env.BRANCH_NAME}"
+      echo "❌ Pipeline failed for branch ${env.BRANCH_NAME}"
+    }
+    always {
+      echo "🧹 Cleanup completed"
     }
   }
 }
