@@ -99,7 +99,7 @@ pipeline {
     stage('Read Version') {
       steps {
         script {
-          version = readFile('VERSION').trim()
+          def version = readFile('VERSION').trim()
           echo "Version: ${version}"
         }
       }
