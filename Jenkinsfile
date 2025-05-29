@@ -29,6 +29,20 @@ pipeline {
               limits:
                 memory: "256Mi"
                 cpu: "100m"
+          - name: docker
+            image: docker:20.10-dind
+            securityContext:
+              privileged: true
+            volumeMounts:
+            - name: docker-sock
+              mountPath: /var/run/docker.sock
+            resources:
+              requests:
+                memory: "256Mi"
+                cpu: "100m"
+              limits:
+                memory: "512Mi"
+                cpu: "200m"
           - name: kubectl
             image: bitnami/kubectl:latest
             command:
@@ -53,6 +67,10 @@ pipeline {
               limits:
                 memory: "128Mi"
                 cpu: "100m"
+          volumes:
+          - name: docker-sock
+            hostPath:
+              path: /var/run/docker.sock
       """
     }
   }
@@ -78,6 +96,7 @@ pipeline {
           echo "=== DEBUG INFO ==="
           echo "Node name: ${env.NODE_NAME}"
           echo "Workspace: ${env.WORKSPACE}"
+          echo "Branch: ${env.BRANCH_NAME}"
           
           sh '''
             echo "=== Container Info ==="
@@ -99,9 +118,9 @@ pipeline {
     stage('Read Version') {
       steps {
         script {
-          // Definisci come variabile globale (senza def)
           version = readFile('VERSION').trim()
           echo "Version: ${version}"
+          echo "Branch: ${env.BRANCH_NAME}"
         }
       }
     }
@@ -119,13 +138,51 @@ pipeline {
       }
     }
 
+    stage('Build & Push Docker Image') {
+      when {
+        anyOf {
+          branch 'release-dev'
+          branch 'release'
+          branch 'release-hv'
+        }
+      }
+      steps {
+        container('docker') {
+          withCredentials([usernamePassword(credentialsId: CREDENTIALS_DOCKER, passwordVariable: 'DOCKER_PASSWORD', usernameVariable: 'DOCKER_USERNAME')]) {
+            script {
+              sh """
+                echo "=== Docker Build & Push ==="
+                echo "Building image: ${DOCKER_REGISTRY}/ice-pulse-api:${version}"
+                
+                # Login to Docker Hub
+                echo \$DOCKER_PASSWORD | docker login -u \$DOCKER_USERNAME --password-stdin
+                
+                # Build image (assuming Dockerfile exists)
+                docker build -t ${DOCKER_REGISTRY}/ice-pulse-api:${version} .
+                
+                # Tag as latest for the environment
+                docker tag ${DOCKER_REGISTRY}/ice-pulse-api:${version} ${DOCKER_REGISTRY}/ice-pulse-api:latest-${env.BRANCH_NAME}
+                
+                # Push both tags
+                docker push ${DOCKER_REGISTRY}/ice-pulse-api:${version}
+                docker push ${DOCKER_REGISTRY}/ice-pulse-api:latest-${env.BRANCH_NAME}
+                
+                echo "=== Docker push completed ==="
+                docker logout
+              """
+            }
+          }
+        }
+      }
+    }
+
     stage('Deploy to Dev') {
       when { branch 'release-dev' }
       steps {
         container('tools') {
           withCredentials([sshUserPrivateKey(credentialsId: CREDENTIALS_GIT_INFRA, keyFileVariable: 'SSH_KEY')]) {
             script {
-              echo "=== Deploy to Dev ==="
+              echo "=== Deploy to Dev Environment ==="
               echo "Version to deploy: ${version}"
               
               sh """
@@ -140,14 +197,10 @@ pipeline {
                 cd ${INFRA_CLONE_DIR}
                 git checkout ${INFRA_BRANCH}
                 
-                echo "=== Repository cloned ==="
-                ls -la
-                
                 echo "=== Installing yq ==="
                 apk add --no-cache curl
                 curl -L https://github.com/mikefarah/yq/releases/download/v4.30.8/yq_linux_amd64 -o /usr/local/bin/yq
                 chmod +x /usr/local/bin/yq
-                yq --version
                 
                 echo "=== Current deployment file ==="
                 cat ${DEPLOY_PATH_DEV}
@@ -162,17 +215,14 @@ pipeline {
                 git config user.email "ci@jenkins.local"
                 git config user.name "Jenkins CI"
                 
-                echo "=== Git status ==="
-                git status
-                
                 echo "=== Committing changes ==="
                 git add .
-                git commit -m "ci: deploy ice-pulse-api:${version} to dev" || echo "No changes to commit"
+                git commit -m "ci: deploy ice-pulse-api:${version} to dev environment" || echo "No changes to commit"
                 
                 echo "=== Pushing to remote ==="
                 git push origin ${INFRA_BRANCH}
                 
-                echo "=== Deploy completed ==="
+                echo "=== Deploy to Dev completed ==="
               """
             }
           }
@@ -180,31 +230,56 @@ pipeline {
       }
     }
 
-    stage('Promote to Staging') {
+    stage('Deploy to Staging') {
       when { branch 'release' }
       steps {
         container('tools') {
-          script {
-            echo "=== Promote to Staging ==="
-            echo "Version to deploy: ${version}"
-            
-            dir(INFRA_CLONE_DIR) {
-              git url: INFRA_REPO_URL, branch: INFRA_BRANCH, credentialsId: CREDENTIALS_GIT_INFRA
+          withCredentials([sshUserPrivateKey(credentialsId: CREDENTIALS_GIT_INFRA, keyFileVariable: 'SSH_KEY')]) {
+            script {
+              echo "=== Deploy to Staging Environment ==="
+              echo "Version to deploy: ${version}"
               
               sh """
+                echo "=== Setting up SSH ==="
+                mkdir -p ~/.ssh
+                cp \$SSH_KEY ~/.ssh/id_rsa
+                chmod 600 ~/.ssh/id_rsa
+                ssh-keyscan github.com >> ~/.ssh/known_hosts
+                
+                echo "=== Cloning infra repository ==="
+                git clone ${INFRA_REPO_URL} ${INFRA_CLONE_DIR}
+                cd ${INFRA_CLONE_DIR}
+                git checkout ${INFRA_BRANCH}
+                
+                echo "=== Installing yq ==="
                 apk add --no-cache curl
                 curl -L https://github.com/mikefarah/yq/releases/download/v4.30.8/yq_linux_amd64 -o /usr/local/bin/yq
                 chmod +x /usr/local/bin/yq
                 
+                echo "=== Current deployment file ==="
+                cat ${DEPLOY_PATH_STAGING}
+                
+                echo "=== Updating image version ==="
                 yq e -i '.spec.template.spec.containers[0].image = "${DOCKER_REGISTRY}/ice-pulse-api:${version}"' ${DEPLOY_PATH_STAGING}
                 
+                echo "=== Updated deployment file ==="
+                cat ${DEPLOY_PATH_STAGING}
+                
+                echo "=== Git configuration ==="
                 git config user.email "ci@jenkins.local"
                 git config user.name "Jenkins CI"
                 
-                git tag staging-v${version}
+                echo "=== Creating release tag ==="
+                git tag "staging-v${version}" || echo "Tag already exists"
+                
+                echo "=== Committing changes ==="
                 git add .
-                git commit -m "ci: deploy ice-pulse-api:${version} to staging" || echo "No changes to commit"
+                git commit -m "ci: deploy ice-pulse-api:${version} to staging environment" || echo "No changes to commit"
+                
+                echo "=== Pushing to remote ==="
                 git push origin ${INFRA_BRANCH} --tags
+                
+                echo "=== Deploy to Staging completed ==="
               """
             }
           }
@@ -212,31 +287,56 @@ pipeline {
       }
     }
 
-    stage('Promote to Prod') {
+    stage('Deploy to Production') {
       when { branch 'release-hv' }
       steps {
         container('tools') {
-          script {
-            echo "=== Promote to Production ==="
-            echo "Version to deploy: ${version}"
-            
-            dir(INFRA_CLONE_DIR) {
-              git url: INFRA_REPO_URL, branch: INFRA_BRANCH, credentialsId: CREDENTIALS_GIT_INFRA
+          withCredentials([sshUserPrivateKey(credentialsId: CREDENTIALS_GIT_INFRA, keyFileVariable: 'SSH_KEY')]) {
+            script {
+              echo "=== Deploy to Production Environment ==="
+              echo "Version to deploy: ${version}"
               
               sh """
+                echo "=== Setting up SSH ==="
+                mkdir -p ~/.ssh
+                cp \$SSH_KEY ~/.ssh/id_rsa
+                chmod 600 ~/.ssh/id_rsa
+                ssh-keyscan github.com >> ~/.ssh/known_hosts
+                
+                echo "=== Cloning infra repository ==="
+                git clone ${INFRA_REPO_URL} ${INFRA_CLONE_DIR}
+                cd ${INFRA_CLONE_DIR}
+                git checkout ${INFRA_BRANCH}
+                
+                echo "=== Installing yq ==="
                 apk add --no-cache curl
                 curl -L https://github.com/mikefarah/yq/releases/download/v4.30.8/yq_linux_amd64 -o /usr/local/bin/yq
                 chmod +x /usr/local/bin/yq
                 
+                echo "=== Current deployment file ==="
+                cat ${DEPLOY_PATH_PROD}
+                
+                echo "=== Updating image version ==="
                 yq e -i '.spec.template.spec.containers[0].image = "${DOCKER_REGISTRY}/ice-pulse-api:${version}"' ${DEPLOY_PATH_PROD}
                 
+                echo "=== Updated deployment file ==="
+                cat ${DEPLOY_PATH_PROD}
+                
+                echo "=== Git configuration ==="
                 git config user.email "ci@jenkins.local"
                 git config user.name "Jenkins CI"
                 
-                git tag prod-v${version}
+                echo "=== Creating production tag ==="
+                git tag "prod-v${version}" || echo "Tag already exists"
+                
+                echo "=== Committing changes ==="
                 git add .
-                git commit -m "ci: deploy ice-pulse-api:${version} to prod" || echo "No changes to commit"
+                git commit -m "ci: deploy ice-pulse-api:${version} to production environment" || echo "No changes to commit"
+                
+                echo "=== Pushing to remote ==="
                 git push origin ${INFRA_BRANCH} --tags
+                
+                echo "=== Deploy to Production completed ==="
               """
             }
           }
@@ -276,7 +376,20 @@ pipeline {
         echo "✅ Pipeline completed successfully for branch ${env.BRANCH_NAME}"
         echo "Version: ${version}"
         if (env.BRANCH_NAME in ['release-dev', 'release', 'release-hv']) {
-          echo "🚀 Deployment manifest updated in infra repository"
+          def environment = ""
+          switch(env.BRANCH_NAME) {
+            case 'release-dev':
+              environment = "development"
+              break
+            case 'release':
+              environment = "staging"
+              break
+            case 'release-hv':
+              environment = "production"
+              break
+          }
+          echo "🚀 Deployment manifest updated for ${environment} environment"
+          echo "Docker image: ${DOCKER_REGISTRY}/ice-pulse-api:${version}"
         }
       }
     }
