@@ -1,4 +1,3 @@
-# .github/workflows/deploy-production.yml
 name: Deploy to Production
 
 on:
@@ -119,13 +118,13 @@ jobs:
         build-args: |
           VERSION=${{ steps.get_version.outputs.version }}
         # Production build ottimizzato
-        target: production
+        target: prod
 
   deploy:
     name: Update Infrastructure Repository (Production)
     runs-on: ubuntu-latest
     needs: build
-    environment: production  # Richiede approvazione
+    environment: prod  # Richiede approvazione
     
     steps:
     - name: Setup SSH Key
@@ -171,7 +170,7 @@ jobs:
             image: ${{ env.DOCKER_IMAGE }}:prod-latest
             container_name: ice-pulse-api-prod-1
             environment:
-              - ENVIRONMENT=production
+              - ENVIRONMENT=prod
             restart: unless-stopped
         EOF
         fi
@@ -204,7 +203,7 @@ jobs:
         - Actor: ${{ github.actor }}
         - Workflow: ${{ github.workflow }}
         - Branch: ${{ github.ref_name }}
-        - Environment: PRODUCTION
+        - Environment: prod
         - High Availability: 3 replicas"
         
         echo "=== Pushing to remote with tags ==="
