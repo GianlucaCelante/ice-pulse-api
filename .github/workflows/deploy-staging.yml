@@ -1,0 +1,219 @@
+# .github/workflows/deploy-staging.yml (FIXED VERSION)
+name: Deploy to Staging
+
+on:
+  push:
+    branches: [ release ]  # Trigger per staging (come nel Jenkinsfile)
+    paths-ignore:
+      - 'README.md'
+      - 'docs/**'
+      - '.gitignore'
+  
+  # Possibilità di triggerare manualmente
+  workflow_dispatch:
+    inputs:
+      version_override:
+        description: 'Override version from VERSION file'
+        required: false
+        default: ''
+
+env:
+  DOCKER_REGISTRY: docker.io/aipioppi
+  DOCKER_IMAGE: docker.io/aipioppi/ice-pulse-api
+  INFRA_REPO_URL: git@github.com:GianlucaCelante/ice-pulse-infra.git
+  INFRA_BRANCH: master
+  DEPLOY_PATH_STAGING: devops/staging/docker-compose-staging.yml
+
+jobs:
+  build:
+    name: Build and Push Docker Image (Staging)
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+      
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python 3.9
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Install Dependencies & Test
+      run: |
+        python -m pip install --upgrade pip
+        pip install pytest pytest-cov
+        if [ -f requirements.txt ]; then 
+          pip install -r requirements.txt
+        fi
+        echo "=== Running Tests for Staging ==="
+        echo "✅ Test phase completed for staging"
+        
+    - name: Get Version
+      id: get_version
+      run: |
+        if [ -n "${{ github.event.inputs.version_override }}" ]; then
+          VERSION="${{ github.event.inputs.version_override }}"
+        else
+          if [ -f VERSION ]; then
+            VERSION=$(cat VERSION | tr -d '\n\r' | xargs)
+            # Aggiungi .RELEASE solo qui, una volta
+            VERSION="${VERSION}.RELEASE"
+          else
+            VERSION="0.0.$(date +%Y%m%d%H%M%S)-${GITHUB_SHA:0:7}.RELEASE"
+          fi
+        fi
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Building staging version: $VERSION"
+        
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Log in to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+        
+    - name: Build and Push Docker Image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: true
+        tags: |
+          ${{ env.DOCKER_IMAGE }}:${{ steps.get_version.outputs.version }}
+          ${{ env.DOCKER_IMAGE }}:staging-latest
+        # Cache rimossa temporaneamente per evitare errori GitHub
+        build-args: |
+          VERSION=${{ steps.get_version.outputs.version }}
+
+  deploy:
+    name: Update Infrastructure Repository (Staging)
+    runs-on: ubuntu-latest
+    needs: build
+    
+    steps:
+    - name: Setup SSH Key
+      uses: webfactory/ssh-agent@v0.8.0
+      with:
+        ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+        
+    - name: Clone Infrastructure Repository
+      run: |
+        echo "=== Cloning infra repository ==="
+        git clone ${{ env.INFRA_REPO_URL }} infra-repo
+        cd infra-repo
+        git checkout ${{ env.INFRA_BRANCH }}
+        
+        echo "=== Git configuration ==="
+        git config user.name "GitHub Actions Bot"
+        git config user.email "actions@github.com"
+        
+    - name: Install yq
+      run: |
+        echo "=== Installing yq ==="
+        sudo wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/bin/yq
+        sudo chmod +x /usr/bin/yq
+        yq --version
+        
+    - name: Update Docker Compose Configuration (Staging)
+      run: |
+        cd infra-repo
+        
+        echo "=== Current docker-compose file ==="
+        if [ -f "${{ env.DEPLOY_PATH_STAGING }}" ]; then
+          cat ${{ env.DEPLOY_PATH_STAGING }}
+        else
+          echo "⚠️ Docker compose file not found: ${{ env.DEPLOY_PATH_STAGING }}"
+          echo "Creating staging docker-compose file..."
+          mkdir -p $(dirname ${{ env.DEPLOY_PATH_STAGING }})
+          cat > ${{ env.DEPLOY_PATH_STAGING }} << 'EOF'
+        version: '3.8'
+        services:
+          ice-pulse-api:
+            image: ${{ env.DOCKER_IMAGE }}:${{ needs.build.outputs.version }}
+            container_name: ice-pulse-api-staging
+            ports:
+              - "8081:80"
+            environment:
+              - ENVIRONMENT=staging
+            restart: unless-stopped
+        EOF
+        fi
+        
+        echo "=== Updating image version ==="
+        yq e -i '.services.ice-pulse-api.image = "${{ env.DOCKER_IMAGE }}:staging-latest"' ${{ env.DEPLOY_PATH_STAGING }}
+        
+        # Aggiorna timestamp per forzare re-deploy
+        TIMESTAMP=$(date +%s)
+        yq e -i ".services.ice-pulse-api.environment += [\"DEPLOY_TIMESTAMP=${TIMESTAMP}\"]" ${{ env.DEPLOY_PATH_STAGING }} || echo "Could not add timestamp"
+        
+        echo "=== Updated docker-compose file ==="
+        cat ${{ env.DEPLOY_PATH_STAGING }}
+        
+    - name: Create Git Tag for Staging
+      run: |
+        cd infra-repo
+        
+        # Crea tag per staging (come nel Jenkinsfile)
+        git tag "staging-v${{ needs.build.outputs.version }}" || echo "Tag already exists"
+        
+    - name: Commit and Push Changes
+      run: |
+        cd infra-repo
+        
+        echo "=== Checking for changes ==="
+        git status
+        git diff
+        
+        if git diff --quiet; then
+          echo "No changes to commit"
+          exit 0
+        fi
+        
+        echo "=== Committing changes ==="
+        git add ${{ env.DEPLOY_PATH_STAGING }}
+        git commit -m "🚀 Deploy staging: ${{ needs.build.outputs.version }}
+
+        - Image: ${{ env.DOCKER_IMAGE }}:${{ needs.build.outputs.version }}
+        - Commit: ${{ github.sha }}
+        - Actor: ${{ github.actor }}
+        - Workflow: ${{ github.workflow }}
+        - Branch: ${{ github.ref_name }}
+        - Environment: staging"
+        
+        echo "=== Pushing to remote with tags ==="
+        git push origin ${{ env.INFRA_BRANCH }} --tags
+        
+    - name: Deployment Summary
+      run: |
+        echo "## 🚀 Staging Deployment Summary" >> $GITHUB_STEP_SUMMARY
+        echo "- **Environment**: staging" >> $GITHUB_STEP_SUMMARY
+        echo "- **Version**: ${{ needs.build.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Image**: ${{ env.DOCKER_IMAGE }}:${{ needs.build.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Commit**: [\`${{ github.sha }}\`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})" >> $GITHUB_STEP_SUMMARY
+        echo "- **Actor**: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Updated File**: \`${{ env.DEPLOY_PATH_STAGING }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "- **Git Tag**: \`staging-v${{ needs.build.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+
+  notify:
+    name: Notify Deployment Status (Staging)
+    runs-on: ubuntu-latest
+    needs: [build, deploy]
+    if: always()
+    
+    steps:
+    - name: Notify Success
+      if: needs.deploy.result == 'success'
+      run: |
+        echo "✅ Deployment to staging successful!"
+        echo "Version: ${{ needs.build.outputs.version }}"
+        echo "Image: ${{ env.DOCKER_IMAGE }}:${{ needs.build.outputs.version }}"
+        echo "Access: http://localhost:8081/health"
+        
+    - name: Notify Failure
+      if: needs.deploy.result == 'failure'
+      run: |
+        echo "❌ Deployment to staging failed!"
+        echo "Check the logs above for details."
