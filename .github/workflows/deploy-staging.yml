@@ -22,7 +22,7 @@ env:
   DOCKER_IMAGE: docker.io/aipioppi/ice-pulse-api
   INFRA_REPO_URL: git@github.com:GianlucaCelante/ice-pulse-infra.git
   INFRA_BRANCH: master
-  DEPLOY_PATH_STAGING: devops/staging/docker-compose-staging.yml
+  DEPLOY_PATH_STAGING: devops/staging/docker-compose-api-staging.yml
 
 jobs:
   build:

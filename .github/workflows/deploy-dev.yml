@@ -3,7 +3,7 @@ name: Deploy to Development
 
 on:
   push:
-    branches: [ main, release-dev ]  # Aggiungi main per test
+    branches: [release-dev ]  # Aggiungi main per test
     paths-ignore:
       - 'README.md'
       - 'docs/**'
@@ -22,7 +22,7 @@ env:
   DOCKER_IMAGE: docker.io/aipioppi/ice-pulse-api
   INFRA_REPO_URL: git@github.com:GianlucaCelante/ice-pulse-infra.git
   INFRA_BRANCH: master  # Stesso del Jenkinsfile
-  DEPLOY_PATH_DEV: devops/dev/docker-compose-dev.yml  # Aggiorna questo path se necessario
+  DEPLOY_PATH_DEV: devops/dev/docker-compose-api-dev.yml  # Aggiorna questo path se necessario
 
 jobs:
   test:

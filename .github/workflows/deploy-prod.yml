@@ -25,7 +25,7 @@ env:
   DOCKER_IMAGE: docker.io/aipioppi/ice-pulse-api
   INFRA_REPO_URL: git@github.com:GianlucaCelante/ice-pulse-infra.git
   INFRA_BRANCH: master
-  DEPLOY_PATH_PROD: devops/prod/docker-compose-prod.yml
+  DEPLOY_PATH_PROD: devops/prod/docker-compose-api-prod.yml
 
 jobs:
   security_check:
