@@ -1,4 +1,4 @@
-# .github/workflows/deploy-staging.yml
+# .github/workflows/deploy-staging.yml (FIXED VERSION)
 name: Deploy to Staging
 
 on:
@@ -25,10 +25,12 @@ env:
   DEPLOY_PATH_STAGING: devops/staging/docker-compose-staging.yml
 
 jobs:
-  test:
-    name: Build & Test (Staging)
+  build:
+    name: Build and Push Docker Image (Staging)
     runs-on: ubuntu-latest
-    
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+      
     steps:
     - name: Checkout Code
       uses: actions/checkout@v4
@@ -38,49 +40,16 @@ jobs:
       with:
         python-version: '3.9'
         
-    - name: Install Dependencies
+    - name: Install Dependencies & Test
       run: |
         python -m pip install --upgrade pip
         pip install pytest pytest-cov
         if [ -f requirements.txt ]; then 
           pip install -r requirements.txt
         fi
-        
-    - name: Run Tests (Staging-specific)
-      run: |
         echo "=== Running Tests for Staging ==="
-        # Aggiungi qui test più completi per staging
-        # pytest --cov=. --cov-report=xml --cov-report=term
         echo "✅ Test phase completed for staging"
         
-    - name: Read Version
-      id: version
-      run: |
-        if [ -n "${{ github.event.inputs.version_override }}" ]; then
-          VERSION="${{ github.event.inputs.version_override }}"
-        else
-          if [ -f VERSION ]; then
-            VERSION=$(cat VERSION | tr -d '\n\r' | xargs)
-            # Per staging, aggiungi suffisso .RELEASE (come nel Jenkinsfile)
-            VERSION="${VERSION}.RELEASE"
-          else
-            VERSION="0.0.$(date +%Y%m%d%H%M%S)-${GITHUB_SHA:0:7}.RELEASE"
-          fi
-        fi
-        echo "version=$VERSION" >> $GITHUB_OUTPUT
-        echo "Staging version: $VERSION"
-
-  build:
-    name: Build and Push Docker Image (Staging)
-    runs-on: ubuntu-latest
-    needs: test
-    outputs:
-      version: ${{ steps.get_version.outputs.version }}
-      
-    steps:
-    - name: Checkout Code
-      uses: actions/checkout@v4
-      
     - name: Get Version
       id: get_version
       run: |
@@ -89,6 +58,7 @@ jobs:
         else
           if [ -f VERSION ]; then
             VERSION=$(cat VERSION | tr -d '\n\r' | xargs)
+            # Aggiungi .RELEASE solo qui, una volta
             VERSION="${VERSION}.RELEASE"
           else
             VERSION="0.0.$(date +%Y%m%d%H%M%S)-${GITHUB_SHA:0:7}.RELEASE"
@@ -114,8 +84,7 @@ jobs:
         tags: |
           ${{ env.DOCKER_IMAGE }}:${{ steps.get_version.outputs.version }}
           ${{ env.DOCKER_IMAGE }}:staging-latest
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+        # Cache rimossa temporaneamente per evitare errori GitHub
         build-args: |
           VERSION=${{ steps.get_version.outputs.version }}
 
@@ -174,10 +143,11 @@ jobs:
         fi
         
         echo "=== Updating image version ==="
-        yq e -i '.services.ice-pulse-api.image = "${{ env.DOCKER_IMAGE }}:${{ needs.build.outputs.version }}"' ${{ env.DEPLOY_PATH_STAGING }}
+        yq e -i '.services.ice-pulse-api.image = "${{ env.DOCKER_IMAGE }}:staging-latest"' ${{ env.DEPLOY_PATH_STAGING }}
         
         # Aggiorna timestamp per forzare re-deploy
-        yq e -i '.services.ice-pulse-api.environment += ["DEPLOY_TIMESTAMP=$(date +%s)"]' ${{ env.DEPLOY_PATH_STAGING }} || echo "Could not add timestamp"
+        TIMESTAMP=$(date +%s)
+        yq e -i ".services.ice-pulse-api.environment += [\"DEPLOY_TIMESTAMP=${TIMESTAMP}\"]" ${{ env.DEPLOY_PATH_STAGING }} || echo "Could not add timestamp"
         
         echo "=== Updated docker-compose file ==="
         cat ${{ env.DEPLOY_PATH_STAGING }}
