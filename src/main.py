@@ -1,14 +1,25 @@
-# main.py - Basic FastAPI app per ice-pulse-api
+# main.py - Ice Pulse API
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 import os
 import uvicorn
+from datetime import datetime
 
 # Configurazione app
 app = FastAPI(
     title="Ice Pulse API",
     description="Backend API for Ice Pulse IoT HACCP System",
-    version=os.getenv("VERSION", "0.0.4"),
+    version=os.getenv("VERSION", "0.0.7"),
+)
+
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In produzione, specifica i domini esatti
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Health check endpoint (necessario per Docker health check)
@@ -18,8 +29,9 @@ async def health_check():
         status_code=200,
         content={
             "status": "healthy",
-            "version": os.getenv("VERSION", "0.0.4"),
-            "environment": os.getenv("ENVIRONMENT", "development")
+            "version": os.getenv("VERSION", "0.0.7"),
+            "environment": os.getenv("ENVIRONMENT", "development"),
+            "timestamp": datetime.utcnow().isoformat() + "Z"
         }
     )
 
@@ -27,21 +39,62 @@ async def health_check():
 @app.get("/")
 async def root():
     return {
-        "message": "Ice Pulse API is running",
-        "version": os.getenv("VERSION", "0.0.4"),
-        "environment": os.getenv("ENVIRONMENT", "development")
+        "message": "🧊 Ice Pulse API is running!",
+        "version": os.getenv("VERSION", "0.0.7"),
+        "environment": os.getenv("ENVIRONMENT", "development"),
+        "timestamp": datetime.utcnow().isoformat() + "Z"
     }
 
-# API endpoints (aggiungi qui i tuoi endpoint esistenti)
+# API v1 endpoints
 @app.get("/api/v1/status")
 async def api_status():
     return {
         "api": "ice-pulse",
         "status": "operational",
-        "timestamp": "2024-01-01T00:00:00Z"  # Sostituisci con datetime reale
+        "version": os.getenv("VERSION", "0.0.7"),
+        "environment": os.getenv("ENVIRONMENT", "development"),
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "features": [
+            "health-monitoring",
+            "temperature-tracking", 
+            "alert-system",
+            "data-logging"
+        ]
     }
 
-# Entry point per development
+# Placeholder endpoints per funzionalità IoT HACCP
+@app.get("/api/v1/sensors")
+async def get_sensors():
+    return {
+        "sensors": [
+            {
+                "id": "temp_001",
+                "type": "temperature",
+                "location": "freezer_1",
+                "status": "active",
+                "last_reading": -18.5,
+                "timestamp": datetime.utcnow().isoformat() + "Z"
+            },
+            {
+                "id": "temp_002", 
+                "type": "temperature",
+                "location": "fridge_1",
+                "status": "active",
+                "last_reading": 4.2,
+                "timestamp": datetime.utcnow().isoformat() + "Z"
+            }
+        ]
+    }
+
+@app.get("/api/v1/alerts")
+async def get_alerts():
+    return {
+        "alerts": [],
+        "count": 0,
+        "last_check": datetime.utcnow().isoformat() + "Z"
+    }
+
+# Entry point per development locale
 if __name__ == "__main__":
     uvicorn.run(
         "main:app",

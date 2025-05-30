@@ -9,7 +9,7 @@ LABEL description="Ice Pulse API Backend"
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PORT=80
-ENV ENVIRONMENT=production
+ENV ENVIRONMENT=dev
 
 # Installa dipendenze di sistema (Alpine usa apk invece di apt-get)
 RUN apk add --no-cache \
@@ -44,9 +44,9 @@ USER appuser
 # Esponi la porta
 EXPOSE $PORT
 
-# Health check
+# Health check (aggiorna per usare il path corretto)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-  CMD curl -f http://localhost:$PORT/health || exit 1
+  CMD curl -f http://localhost:$PORT/health || curl -f http://localhost:$PORT/ || exit 1
 
-# Comando di avvio
-CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "80"]
+# Comando di avvio 
+CMD ["python", "-m", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "80"]
