@@ -26,7 +26,7 @@ app.add_middleware(
 @app.get("/health")
 async def health_check():
 
-    version = os.getenv("VERSION")
+    version = os.getenv("VERSION", "0.0.10")
     return JSONResponse(
         status_code=200,
         content={
