@@ -25,13 +25,12 @@ app.add_middleware(
 # Health check endpoint (necessario per Docker health check)
 @app.get("/health")
 async def health_check():
+
+    version = os.getenv("VERSION")
     return JSONResponse(
         status_code=200,
         content={
-            "status": "healthy",
-            "version": os.getenv("VERSION", "0.0.7"),
-            "environment": os.getenv("ENVIRONMENT", "development"),
-            "timestamp": datetime.utcnow().isoformat() + "Z"
+            "version": version
         }
     )
 
