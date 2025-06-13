@@ -336,38 +336,38 @@ def upgrade() -> None:
             p_organization_id UUID,
             p_role TEXT
         )
-        RETURNS VOID AS $
+        RETURNS VOID AS $$
         BEGIN
             -- Imposta variabili di sessione per RLS
             PERFORM set_config('app.current_user_id', p_user_id::TEXT, false);
             PERFORM set_config('app.current_organization_id', p_organization_id::TEXT, false);
             PERFORM set_config('app.current_user_role', p_role, false);
         END;
-        $ LANGUAGE plpgsql SECURITY DEFINER;
+        $$ LANGUAGE plpgsql SECURITY DEFINER;
         
         -- Function per impostare contesto sensore (per IoT)
         CREATE OR REPLACE FUNCTION set_sensor_context(
             p_sensor_id UUID,
             p_organization_id UUID
         )
-        RETURNS VOID AS $
+        RETURNS VOID AS $$
         BEGIN
             PERFORM set_config('app.current_organization_id', p_organization_id::TEXT, false);
             PERFORM set_config('app.current_user_role', 'sensor', false);
             PERFORM set_config('app.current_sensor_id', p_sensor_id::TEXT, false);
         END;
-        $ LANGUAGE plpgsql SECURITY DEFINER;
+        $$ LANGUAGE plpgsql SECURITY DEFINER;
         
         -- Function per pulire il contesto
         CREATE OR REPLACE FUNCTION clear_user_context()
-        RETURNS VOID AS $
+        RETURNS VOID AS $$
         BEGIN
             PERFORM set_config('app.current_user_id', NULL, false);
             PERFORM set_config('app.current_organization_id', NULL, false);
             PERFORM set_config('app.current_user_role', NULL, false);
             PERFORM set_config('app.current_sensor_id', NULL, false);
         END;
-        $ LANGUAGE plpgsql SECURITY DEFINER;
+        $$ LANGUAGE plpgsql SECURITY DEFINER;
     """)
     
     # =====================================================
@@ -376,7 +376,7 @@ def upgrade() -> None:
     op.execute("""
         -- Function per loggare accessi con RLS
         CREATE OR REPLACE FUNCTION log_rls_access()
-        RETURNS TRIGGER AS $
+        RETURNS TRIGGER AS $$
         BEGIN
             -- Log solo per operazioni sensibili
             IF TG_OP IN ('INSERT', 'UPDATE', 'DELETE') THEN
@@ -407,7 +407,7 @@ def upgrade() -> None:
             
             RETURN COALESCE(NEW, OLD);
         END;
-        $ LANGUAGE plpgsql;
+        $$ LANGUAGE plpgsql;
         
         -- Applica trigger di audit a tabelle critiche
         CREATE TRIGGER tr_sensors_audit AFTER INSERT OR UPDATE OR DELETE ON sensors
@@ -426,7 +426,7 @@ def upgrade() -> None:
     op.execute("""
         -- Function per applicare RLS alle nuove partizioni readings
         CREATE OR REPLACE FUNCTION apply_rls_to_readings_partition()
-        RETURNS EVENT_TRIGGER AS $
+        RETURNS EVENT_TRIGGER AS $$
         DECLARE
             obj RECORD;
         BEGIN
@@ -439,7 +439,7 @@ def upgrade() -> None:
                 -- Le policies vengono ereditate dalla tabella madre
             END LOOP;
         END;
-        $ LANGUAGE plpgsql;
+        $$ LANGUAGE plpgsql;
         
         -- Event trigger per auto-RLS su nuove partizioni
         CREATE EVENT TRIGGER readings_partition_rls
@@ -463,7 +463,7 @@ def upgrade() -> None:
             accessible_rows BIGINT,
             total_rows BIGINT,
             isolation_effective BOOLEAN
-        ) AS $
+        ) AS $$
         DECLARE
             original_user_id TEXT;
             original_org_id TEXT;
@@ -499,7 +499,7 @@ def upgrade() -> None:
                 PERFORM clear_user_context();
             END IF;
         END;
-        $ LANGUAGE plpgsql;
+        $$ LANGUAGE plpgsql;
     """)
 
 def downgrade() -> None:
