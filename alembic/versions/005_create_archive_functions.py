@@ -474,7 +474,7 @@ def upgrade() -> None:
             overdue_calibrations INTEGER,
             storage_size_mb NUMERIC,
             last_activity TIMESTAMPTZ
-        ) AS $
+        ) AS $$
         BEGIN
             RETURN QUERY
             WITH org_stats AS (
@@ -519,7 +519,7 @@ def upgrade() -> None:
             FROM org_stats os
             ORDER BY os.name;
         END;
-        $ LANGUAGE plpgsql;
+        $$ LANGUAGE plpgsql;
         
         -- Function per health check sistema
         CREATE OR REPLACE FUNCTION system_health_check()
@@ -529,7 +529,7 @@ def upgrade() -> None:
             value TEXT,
             threshold TEXT,
             message TEXT
-        ) AS $
+        ) AS $$
         DECLARE
             partition_count INTEGER;
             oldest_partition TEXT;
@@ -603,7 +603,7 @@ def upgrade() -> None:
                 'enabled'::TEXT,
                 'Row Level Security status';
         END;
-        $ LANGUAGE plpgsql;
+        $$ LANGUAGE plpgsql;
     """)
     
     # =====================================================
@@ -618,7 +618,7 @@ def upgrade() -> None:
             rows_affected BIGINT,
             duration_seconds NUMERIC,
             status TEXT
-        ) AS $
+        ) AS $$
         DECLARE
             partition_rec RECORD;
             start_time TIMESTAMPTZ;
@@ -665,7 +665,7 @@ def upgrade() -> None:
                 EXTRACT(EPOCH FROM (end_time - start_time))::NUMERIC,
                 'SUCCESS'::TEXT;
         END;
-        $ LANGUAGE plpgsql;
+        $$ LANGUAGE plpgsql;
         
         -- Function per reindex critico
         CREATE OR REPLACE FUNCTION reindex_critical_indexes()
@@ -676,7 +676,7 @@ def upgrade() -> None:
             size_after_mb NUMERIC,
             duration_seconds NUMERIC,
             status TEXT
-        ) AS $
+        ) AS $$
         DECLARE
             idx_rec RECORD;
             start_time TIMESTAMPTZ;
@@ -715,7 +715,7 @@ def upgrade() -> None:
                     'SUCCESS'::TEXT;
             END LOOP;
         END;
-        $ LANGUAGE plpgsql;
+        $$ LANGUAGE plpgsql;
     """)
     
     # =====================================================
@@ -734,7 +734,7 @@ def upgrade() -> None:
             metric_value TEXT,
             compliance_status TEXT,
             notes TEXT
-        ) AS $
+        ) AS $$
         DECLARE
             total_readings BIGINT;
             deviation_readings BIGINT;
@@ -817,7 +817,7 @@ def upgrade() -> None:
                 'COMPLIANT'::TEXT,
                 'All changes tracked in audit_log with timestamp and user identification';
         END;
-        $ LANGUAGE plpgsql;
+        $$ LANGUAGE plpgsql;
     """)
 
 def downgrade() -> None:
