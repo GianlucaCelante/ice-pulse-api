@@ -6,12 +6,15 @@ import os
 import sys
 from pathlib import Path
 
-# Aggiungi src path per import models
+# Aggiungi src path per import models (quando li avremo)
 sys.path.append(str(Path(__file__).parent.parent / "src"))
 
-# Import dei models per auto-generation
-from sqlalchemy.orm import declarative_base
-Base = declarative_base()
+# Import dei models per auto-generation (quando li creeremo)
+# from src.models import Base
+# target_metadata = Base.metadata
+
+# Per ora, metadata vuoto (usiamo migrations manuali)
+target_metadata = None
 
 # Configurazione Alembic
 config = context.config
@@ -20,10 +23,6 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Target metadata per auto-generation
-target_metadata = Base.metadata
-
-# Configurazione database da environment variables
 def get_database_url():
     """Costruisce URL database da environment variables"""
     DB_USER = os.getenv("DB_USER", "postgres")
@@ -32,7 +31,7 @@ def get_database_url():
     DB_PORT = os.getenv("DB_PORT", "5432")
     DB_NAME = os.getenv("DB_NAME", "icepulse")
     
-    return f"postgresql+asyncpg://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+    return f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""
@@ -53,6 +52,7 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
+    # Override della connection string da environment
     configuration = config.get_section(config.config_ini_section) or {}
     configuration["sqlalchemy.url"] = get_database_url()
     

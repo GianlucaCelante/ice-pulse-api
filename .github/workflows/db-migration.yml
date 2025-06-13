@@ -1,0 +1,504 @@
+# .github/workflows/db-migration.yml
+name: Database Migration & Schema Management
+
+on:
+  push:
+    branches: [main, release, release-dev, release-hv]
+    paths:
+      - 'alembic/versions/**'
+      - 'alembic/alembic.ini'
+      - 'alembic/env.py'
+      - 'src/models/**'
+      - '.github/workflows/db-migration.yml'
+  
+  # Manual trigger per migrations on-demand
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      migration_action:
+        description: 'Migration action'
+        required: true
+        default: 'upgrade'
+        type: choice
+        options:
+          - upgrade
+          - current
+          - history
+          - downgrade_one
+      confirm_production:
+        description: 'Type CONFIRM-PROD-MIGRATION for production'
+        required: false
+        default: ''
+
+env:
+  PYTHON_VERSION: '3.9'
+
+jobs:
+  # =====================================================
+  # JOB 1: VALIDATE MIGRATIONS
+  # =====================================================
+  validate_migrations:
+    name: Validate Migration Files
+    runs-on: ubuntu-latest
+    
+    outputs:
+      has_migrations: ${{ steps.check_migrations.outputs.has_migrations }}
+      migration_files: ${{ steps.check_migrations.outputs.migration_files }}
+    
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+      
+    - name: Check Migration Files
+      id: check_migrations
+      run: |
+        echo "=== Checking for migration files ==="
+        if ls alembic/versions/*.py 1> /dev/null 2>&1; then
+          echo "has_migrations=true" >> $GITHUB_OUTPUT
+          echo "Migration files found:"
+          ls -la alembic/versions/
+          
+          # Lista file per output
+          migration_files=$(ls alembic/versions/*.py | tr '\n' ',' | sed 's/,$//')
+          echo "migration_files=$migration_files" >> $GITHUB_OUTPUT
+        else
+          echo "has_migrations=false" >> $GITHUB_OUTPUT
+          echo "No migration files found"
+        fi
+        
+    - name: Validate Migration Structure
+      if: steps.check_migrations.outputs.has_migrations == 'true'
+      run: |
+        echo "=== Validating migration file structure ==="
+        
+        # Check che tutti i file abbiano revision ID
+        for file in alembic/versions/*.py; do
+          if ! grep -q "revision = " "$file"; then
+            echo "❌ Missing revision ID in $file"
+            exit 1
+          fi
+          
+          if ! grep -q "def upgrade" "$file"; then
+            echo "❌ Missing upgrade() function in $file"
+            exit 1
+          fi
+          
+          if ! grep -q "def downgrade" "$file"; then
+            echo "❌ Missing downgrade() function in $file" 
+            exit 1
+          fi
+          
+          echo "✅ $file structure valid"
+        done
+
+  # =====================================================
+  # JOB 2: TEST MIGRATIONS (Dev DB)
+  # =====================================================
+  test_migrations:
+    name: Test Migrations on Dev Database
+    runs-on: ubuntu-latest
+    needs: validate_migrations
+    if: needs.validate_migrations.outputs.has_migrations == 'true'
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_USER: test_user
+          POSTGRES_DB: icepulse_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        
+    - name: Install Dependencies
+      run: |
+        pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest psycopg2-binary
+        
+    - name: Setup Test Database Environment
+      run: |
+        echo "=== Setting up test database environment ==="
+        export DB_HOST=localhost
+        export DB_PORT=5432
+        export DB_NAME=icepulse_test
+        export DB_USER=test_user
+        export DB_PASSWORD=test_password
+        
+        # Test DB connection
+        PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -c "SELECT version();"
+        
+    - name: Test Migration Upgrade
+      env:
+        DB_HOST: localhost
+        DB_PORT: 5432
+        DB_NAME: icepulse_test
+        DB_USER: test_user
+        DB_PASSWORD: test_password
+      run: |
+        echo "=== Testing migration upgrade ==="
+        
+        # Check alembic config
+        alembic check
+        
+        # Show current revision (should be empty)
+        alembic current || echo "No current revision (expected for new DB)"
+        
+        # Show migration history
+        alembic history
+        
+        # Apply all migrations
+        alembic upgrade head
+        
+        # Verify final state
+        alembic current
+        
+    - name: Test Migration Downgrade
+      env:
+        DB_HOST: localhost
+        DB_PORT: 5432
+        DB_NAME: icepulse_test
+        DB_USER: test_user
+        DB_PASSWORD: test_password
+      run: |
+        echo "=== Testing migration downgrade ==="
+        
+        # Downgrade one step
+        alembic downgrade -1
+        
+        # Upgrade back
+        alembic upgrade head
+        
+        echo "✅ Migration up/down test successful"
+        
+    - name: Validate Database Schema
+      env:
+        DB_HOST: localhost
+        DB_PORT: 5432
+        DB_NAME: icepulse_test
+        DB_USER: test_user
+        DB_PASSWORD: test_password
+      run: |
+        echo "=== Validating final schema ==="
+        
+        # Check that critical tables exist
+        PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -c "
+          SELECT table_name FROM information_schema.tables 
+          WHERE table_schema = 'public' 
+          AND table_name IN ('organizations', 'users', 'sensors', 'readings', 'alerts')
+          ORDER BY table_name;
+        "
+        
+        # Check RLS is enabled
+        PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -c "
+          SELECT tablename, rowsecurity 
+          FROM pg_tables t
+          JOIN pg_class c ON c.relname = t.tablename
+          WHERE schemaname = 'public' 
+          AND tablename IN ('organizations', 'users', 'sensors')
+          ORDER BY tablename;
+        "
+        
+        # Test health check function
+        PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -c "
+          SELECT * FROM system_health_check() LIMIT 3;
+        "
+
+  # =====================================================
+  # JOB 3: APPLY TO DEV ENVIRONMENT
+  # =====================================================
+  apply_dev_migrations:
+    name: Apply Migrations to Dev Environment
+    runs-on: ubuntu-latest
+    needs: [validate_migrations, test_migrations]
+    if: |
+      needs.validate_migrations.outputs.has_migrations == 'true' &&
+      (github.ref == 'refs/heads/release-dev' || 
+       github.event.inputs.environment == 'dev')
+    
+    environment: dev
+    
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        
+    - name: Install Dependencies
+      run: |
+        pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Apply Dev Migrations
+      env:
+        DB_HOST: ${{ secrets.DEV_DB_HOST }}
+        DB_PORT: ${{ secrets.DEV_DB_PORT }}
+        DB_NAME: ${{ secrets.DEV_DB_NAME }}
+        DB_USER: ${{ secrets.DEV_DB_USER }}
+        DB_PASSWORD: ${{ secrets.DEV_DB_PASSWORD }}
+      run: |
+        echo "=== Applying migrations to DEV environment ==="
+        
+        # Backup current state (optional)
+        echo "Current revision before migration:"
+        alembic current || echo "No current revision"
+        
+        # Apply migrations
+        alembic upgrade head
+        
+        # Verify final state  
+        echo "Final revision after migration:"
+        alembic current
+        
+        echo "✅ Dev migrations applied successfully"
+
+  # =====================================================
+  # JOB 4: APPLY TO STAGING ENVIRONMENT
+  # =====================================================
+  apply_staging_migrations:
+    name: Apply Migrations to Staging Environment  
+    runs-on: ubuntu-latest
+    needs: [validate_migrations, test_migrations]
+    if: |
+      needs.validate_migrations.outputs.has_migrations == 'true' &&
+      (github.ref == 'refs/heads/release' || 
+       github.event.inputs.environment == 'staging')
+    
+    environment: staging
+    
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        
+    - name: Install Dependencies
+      run: |
+        pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Apply Staging Migrations
+      env:
+        DB_HOST: ${{ secrets.STAGING_DB_HOST }}
+        DB_PORT: ${{ secrets.STAGING_DB_PORT }}
+        DB_NAME: ${{ secrets.STAGING_DB_NAME }}
+        DB_USER: ${{ secrets.STAGING_DB_USER }}
+        DB_PASSWORD: ${{ secrets.STAGING_DB_PASSWORD }}
+      run: |
+        echo "=== Applying migrations to STAGING environment ==="
+        
+        # Show current state
+        alembic current
+        alembic history --verbose
+        
+        # Apply migrations
+        alembic upgrade head
+        
+        # Verify and test
+        alembic current
+        
+        # Run health check
+        echo "=== Running post-migration health check ==="
+        python -c "
+        import os
+        import asyncpg
+        import asyncio
+        
+        async def health_check():
+            conn = await asyncpg.connect(
+                host=os.getenv('DB_HOST'),
+                port=os.getenv('DB_PORT'),
+                database=os.getenv('DB_NAME'),
+                user=os.getenv('DB_USER'),
+                password=os.getenv('DB_PASSWORD')
+            )
+            
+            result = await conn.fetch('SELECT * FROM system_health_check() LIMIT 5')
+            for row in result:
+                print(f'{row[0]}: {row[1]} - {row[4]}')
+            
+            await conn.close()
+            
+        asyncio.run(health_check())
+        "
+        
+        echo "✅ Staging migrations applied successfully"
+
+  # =====================================================
+  # JOB 5: APPLY TO PRODUCTION (Con approvazione manuale)
+  # =====================================================
+  apply_prod_migrations:
+    name: Apply Migrations to Production Environment
+    runs-on: ubuntu-latest
+    needs: [validate_migrations, test_migrations]
+    if: |
+      needs.validate_migrations.outputs.has_migrations == 'true' &&
+      (github.ref == 'refs/heads/release-hv' || 
+       github.event.inputs.environment == 'prod')
+    
+    environment: prod  # Richiede approvazione manuale
+    
+    steps:
+    - name: Production Safety Check
+      if: github.event.inputs.environment == 'prod'
+      run: |
+        if [ "${{ github.event.inputs.confirm_production }}" != "CONFIRM-PROD-MIGRATION" ]; then
+          echo "❌ Production migration not confirmed"
+          echo "Please type 'CONFIRM-PROD-MIGRATION' to proceed"
+          exit 1
+        fi
+        echo "✅ Production migration confirmed"
+      
+    - name: Checkout Code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        
+    - name: Install Dependencies
+      run: |
+        pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Pre-Migration Backup (Production)
+      env:
+        DB_HOST: ${{ secrets.PROD_DB_HOST }}
+        DB_PORT: ${{ secrets.PROD_DB_PORT }}
+        DB_NAME: ${{ secrets.PROD_DB_NAME }}
+        DB_USER: ${{ secrets.PROD_DB_USER }}
+        DB_PASSWORD: ${{ secrets.PROD_DB_PASSWORD }}
+      run: |
+        echo "=== Creating pre-migration backup ==="
+        
+        # Create backup timestamp
+        BACKUP_TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+        echo "Backup timestamp: $BACKUP_TIMESTAMP"
+        
+        # Get current revision for backup naming
+        CURRENT_REV=$(alembic current --head-only 2>/dev/null || echo "none")
+        echo "Current revision: $CURRENT_REV"
+        
+        echo "⚠️ In production, you should implement actual backup here"
+        echo "Example: pg_dump, AWS RDS snapshot, etc."
+        
+    - name: Apply Production Migrations
+      env:
+        DB_HOST: ${{ secrets.PROD_DB_HOST }}
+        DB_PORT: ${{ secrets.PROD_DB_PORT }}
+        DB_NAME: ${{ secrets.PROD_DB_NAME }}
+        DB_USER: ${{ secrets.PROD_DB_USER }}
+        DB_PASSWORD: ${{ secrets.PROD_DB_PASSWORD }}
+      run: |
+        echo "=== Applying migrations to PRODUCTION environment ==="
+        
+        # Show detailed current state
+        echo "Current database state:"
+        alembic current
+        alembic history --verbose
+        
+        # Apply migrations with extra logging
+        echo "Applying migrations..."
+        alembic upgrade head --sql > migration_sql_log.sql || true
+        alembic upgrade head
+        
+        # Verify final state
+        echo "Final database state:"
+        alembic current
+        
+        echo "🎉 Production migrations applied successfully"
+        
+    - name: Post-Migration Verification (Production)
+      env:
+        DB_HOST: ${{ secrets.PROD_DB_HOST }}
+        DB_PORT: ${{ secrets.PROD_DB_PORT }}
+        DB_NAME: ${{ secrets.PROD_DB_NAME }}
+        DB_USER: ${{ secrets.PROD_DB_USER }}
+        DB_PASSWORD: ${{ secrets.PROD_DB_PASSWORD }}
+      run: |
+        echo "=== Post-migration verification ==="
+        
+        # Run comprehensive health check
+        python -c "
+        import os, asyncpg, asyncio
+        
+        async def verify():
+            conn = await asyncpg.connect(
+                host=os.getenv('DB_HOST'),
+                port=os.getenv('DB_PORT'),
+                database=os.getenv('DB_NAME'),
+                user=os.getenv('DB_USER'),
+                password=os.getenv('DB_PASSWORD')
+            )
+            
+            # Health check
+            health = await conn.fetch('SELECT * FROM system_health_check()')
+            print('=== Health Check Results ===')
+            for row in health:
+                status = '✅' if row[1] == 'OK' else '⚠️' if row[1] == 'WARNING' else '❌'
+                print(f'{status} {row[0]}: {row[1]} - {row[4]}')
+            
+            # Test basic functionality
+            orgs = await conn.fetchval('SELECT COUNT(*) FROM organizations')
+            print(f'Organizations count: {orgs}')
+            
+            await conn.close()
+            print('✅ Production verification completed')
+            
+        asyncio.run(verify())
+        "
+
+  # =====================================================
+  # JOB 6: NOTIFICATION & SUMMARY
+  # =====================================================
+  notify_completion:
+    name: Migration Summary & Notifications
+    runs-on: ubuntu-latest
+    needs: [validate_migrations, test_migrations, apply_dev_migrations, apply_staging_migrations, apply_prod_migrations]
+    if: always() && needs.validate_migrations.outputs.has_migrations == 'true'
+    
+    steps:
+    - name: Generate Migration Summary
+      run: |
+        echo "## 🗄️ Database Migration Summary" >> $GITHUB_STEP_SUMMARY
+        echo "- **Trigger**: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Branch**: ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Migration Files**: ${{ needs.validate_migrations.outputs.migration_files }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        echo "### Environment Status:" >> $GITHUB_STEP_SUMMARY
+        echo "- **Validation**: ${{ needs.validate_migrations.result }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Testing**: ${{ needs.test_migrations.result }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Dev**: ${{ needs.apply_dev_migrations.result }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Staging**: ${{ needs.apply_staging_migrations.result }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Production**: ${{ needs.apply_prod_migrations.result }}" >> $GITHUB_STEP_SUMMARY
