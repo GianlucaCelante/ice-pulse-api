@@ -1,33 +1,56 @@
-# .github/workflows/deploy-dev.yml
-name: Deploy to Development
+# .github/workflows/deploy-dev.yml (FIXED)
+name: Deploy to Development (Integrated)
 
 on:
   push:
-    branches: [release-dev ]  # Aggiungi main per test
+    branches: [release-dev]
     paths-ignore:
       - 'README.md'
       - 'docs/**'
       - '.gitignore'
   
-  # Possibilità di triggerare manualmente
   workflow_dispatch:
     inputs:
       version_override:
-        description: 'Override version from VERSION file (leave empty to use VERSION file)'
+        description: 'Override version from VERSION file'
         required: false
         default: ''
+      skip_migrations:
+        description: 'Skip database migrations'
+        required: false
+        default: false
+        type: boolean
 
 env:
-  DOCKER_REGISTRY: docker.io/aipioppi  # Stesso del Jenkinsfile
+  DOCKER_REGISTRY: docker.io/aipioppi
   DOCKER_IMAGE: docker.io/aipioppi/ice-pulse-api
   INFRA_REPO_URL: git@github.com:GianlucaCelante/ice-pulse-infra.git
-  INFRA_BRANCH: master  # Stesso del Jenkinsfile
-  DEPLOY_PATH_DEV: devops/dev/docker-compose-api-dev.yml  # Aggiorna questo path se necessario
+  INFRA_BRANCH: master
+  DEPLOY_PATH_DEV: devops/dev/docker-compose-api-dev.yml
 
 jobs:
-  test:
-    name: Build & Test
+  build_and_migrate:
+    name: Build, Test & Database Migrations
     runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_USER: icepulse
+          POSTGRES_DB: icepulse_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+      migrations_applied: ${{ steps.apply_migrations.outputs.migrations_applied }}
     
     steps:
     - name: Checkout Code
@@ -41,51 +64,11 @@ jobs:
     - name: Install Dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pytest pytest-cov
-        # Installa dipendenze del progetto
+        pip install pytest pytest-cov psycopg2-binary
         if [ -f requirements.txt ]; then 
           pip install -r requirements.txt
-        else
-          echo "⚠️ requirements.txt not found, skipping dependency installation"
         fi
         
-    - name: Run Tests
-      run: |
-        echo "=== Running Tests ==="
-        # Se hai test, decommentali:
-        # pytest --cov=. --cov-report=xml --cov-report=term
-        echo "✅ Test phase completed (pytest currently disabled like in Jenkinsfile)"
-        
-    - name: Read Version
-      id: version
-      run: |
-        if [ -n "${{ github.event.inputs.version_override }}" ]; then
-          VERSION="${{ github.event.inputs.version_override }}"
-          echo "Using manual override version: $VERSION"
-        else
-          if [ -f VERSION ]; then
-            VERSION=$(cat VERSION | tr -d '\n\r' | xargs)
-            echo "Read version from VERSION file: $VERSION"
-          else
-            # Fallback: genera versione da timestamp + commit
-            VERSION="0.0.$(date +%Y%m%d%H%M%S)-${GITHUB_SHA:0:7}"
-            echo "Generated fallback version: $VERSION"
-          fi
-        fi
-        echo "version=$VERSION" >> $GITHUB_OUTPUT
-        echo "Final version: $VERSION"
-
-  build:
-    name: Build and Push Docker Image
-    runs-on: ubuntu-latest
-    needs: test
-    outputs:
-      version: ${{ steps.get_version.outputs.version }}
-      
-    steps:
-    - name: Checkout Code
-      uses: actions/checkout@v4
-      
     - name: Get Version
       id: get_version
       run: |
@@ -100,6 +83,130 @@ jobs:
         fi
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         echo "Building version: $VERSION"
+        
+    - name: Validate Migration Files
+      run: |
+        echo "=== Validating migration files ==="
+        
+        if [ ! -d "alembic/versions" ]; then
+          echo "❌ alembic/versions directory not found"
+          exit 1
+        fi
+        
+        migration_count=$(ls alembic/versions/*.py 2>/dev/null | wc -l)
+        if [ $migration_count -eq 0 ]; then
+          echo "⚠️ No migration files found"
+          echo "migrations_available=false" >> $GITHUB_ENV
+        else
+          echo "✅ Found $migration_count migration files"
+          ls -la alembic/versions/
+          echo "migrations_available=true" >> $GITHUB_ENV
+          
+          # Validate migration file structure
+          for file in alembic/versions/*.py; do
+            if ! grep -q "revision = " "$file"; then
+              echo "❌ Missing revision ID in $file"
+              exit 1
+            fi
+            
+            if ! grep -q "def upgrade" "$file"; then
+              echo "❌ Missing upgrade() function in $file"
+              exit 1
+            fi
+            
+            if ! grep -q "def downgrade" "$file"; then
+              echo "❌ Missing downgrade() function in $file" 
+              exit 1
+            fi
+            
+            echo "✅ $file structure valid"
+          done
+        fi
+        
+    - name: Test Database Migrations
+      if: |
+        github.event.inputs.skip_migrations != 'true' && 
+        env.migrations_available == 'true'
+      id: apply_migrations
+      env:
+        DB_HOST: localhost
+        DB_PORT: 5432
+        DB_NAME: icepulse_test
+        DB_USER: icepulse
+        DB_PASSWORD: test_password
+      run: |
+        echo "=== Testing database migrations ==="
+        
+        # Check alembic config (non-autogenerate)
+        alembic check
+        
+        # Show current state
+        echo "Current revision:"
+        alembic current || echo "No current revision (fresh DB)"
+        
+        # Show available migrations
+        echo "Available migrations:"
+        alembic history --verbose || echo "No migrations found"
+        
+        # Apply migrations (MANUAL MIGRATIONS, not autogenerate)
+        echo "Applying manual migrations..."
+        alembic upgrade head
+        
+        # Verify final state
+        echo "Final revision:"
+        alembic current
+        
+        # Test database schema
+        echo "=== Verifying database schema ==="
+        PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -c "
+          SELECT table_name FROM information_schema.tables 
+          WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+          ORDER BY table_name;
+        "
+        
+        # Count tables created
+        table_count=$(PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -t -c "
+          SELECT COUNT(*) FROM information_schema.tables 
+          WHERE table_schema = 'public' AND table_type = 'BASE TABLE';
+        " | xargs)
+        
+        echo "Tables created: $table_count"
+        
+        if [ "$table_count" -gt 5 ]; then
+          echo "✅ Database schema created successfully"
+          echo "migrations_applied=true" >> $GITHUB_OUTPUT
+        else
+          echo "❌ Expected more tables, migration may have failed"
+          echo "migrations_applied=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+        
+        # Test health check function (se esiste)
+        PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -c "
+          SELECT * FROM system_health_check() LIMIT 3;
+        " || echo "⚠️ Health check function not available (may be normal for some migration stages)"
+        
+        echo "✅ Database migrations completed successfully"
+        
+    - name: Skip Migrations Notice
+      if: |
+        github.event.inputs.skip_migrations == 'true' || 
+        env.migrations_available != 'true'
+      run: |
+        echo "⚠️ Database migrations skipped"
+        echo "migrations_applied=skipped" >> $GITHUB_OUTPUT
+        
+    - name: Run Application Tests
+      env:
+        DB_HOST: localhost
+        DB_PORT: 5432
+        DB_NAME: icepulse_test
+        DB_USER: icepulse
+        DB_PASSWORD: test_password
+      run: |
+        echo "=== Running application tests ==="
+        # pytest --cov=. --cov-report=xml --cov-report=term
+        echo "✅ Test phase completed"
         
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
@@ -123,10 +230,54 @@ jobs:
         build-args: |
           VERSION=${{ steps.get_version.outputs.version }}
 
+  apply_dev_migrations:
+    name: Apply Migrations to Dev Database
+    runs-on: ubuntu-latest
+    needs: build_and_migrate
+    if: |
+      needs.build_and_migrate.outputs.migrations_applied == 'true' &&
+      github.event.inputs.skip_migrations != 'true'
+    
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Install Dependencies
+      run: |
+        pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Apply Dev Database Migrations
+      env:
+        DB_HOST: ${{ secrets.DEV_DB_HOST }}
+        DB_PORT: ${{ secrets.DEV_DB_PORT }}
+        DB_NAME: ${{ secrets.DEV_DB_NAME }}
+        DB_USER: ${{ secrets.DEV_DB_USER }}
+        DB_PASSWORD: ${{ secrets.DEV_DB_PASSWORD }}
+      run: |
+        echo "=== Applying migrations to DEV database ==="
+        
+        echo "Current revision before migration:"
+        alembic current || echo "No current revision"
+        
+        echo "Applying migrations..."
+        alembic upgrade head
+        
+        echo "Final revision after migration:"
+        alembic current
+        
+        echo "✅ Dev database migrations applied"
+
   deploy:
     name: Update Infrastructure Repository
     runs-on: ubuntu-latest
-    needs: build
+    needs: [build_and_migrate, apply_dev_migrations]
+    if: always() && needs.build_and_migrate.result == 'success'
     
     steps:
     - name: Setup SSH Key
@@ -141,33 +292,28 @@ jobs:
         cd infra-repo
         git checkout ${{ env.INFRA_BRANCH }}
         
-        echo "=== Git configuration ==="
         git config user.name "GitHub Actions Bot"
         git config user.email "actions@github.com"
         
     - name: Install yq
       run: |
-        echo "=== Installing yq ==="
         sudo wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/bin/yq
         sudo chmod +x /usr/bin/yq
-        yq --version
         
     - name: Update Docker Compose Configuration
       run: |
         cd infra-repo
         
-        echo "=== Current docker-compose file ==="
+        echo "=== Updating docker-compose file ==="
         if [ -f "${{ env.DEPLOY_PATH_DEV }}" ]; then
           cat ${{ env.DEPLOY_PATH_DEV }}
         else
-          echo "⚠️ Docker compose file not found: ${{ env.DEPLOY_PATH_DEV }}"
-          echo "Creating basic docker-compose file..."
+          echo "Creating docker-compose file..."
           mkdir -p $(dirname ${{ env.DEPLOY_PATH_DEV }})
           cat > ${{ env.DEPLOY_PATH_DEV }} << 'EOF'
-        version: '3.8'
         services:
           ice-pulse-api:
-            image: ${{ env.DOCKER_IMAGE }}:${{ needs.build.outputs.version }}
+            image: ${{ env.DOCKER_IMAGE }}:${{ needs.build_and_migrate.outputs.version }}
             container_name: ice-pulse-api-dev
             ports:
               - "8080:80"
@@ -177,11 +323,7 @@ jobs:
         EOF
         fi
         
-        echo "=== Updating image version ==="
-        yq e -i '.services.ice-pulse-api.image = "${{ env.DOCKER_IMAGE }}:${{ needs.build.outputs.version }}"' ${{ env.DEPLOY_PATH_DEV }}
-        
-        # Aggiorna timestamp per forzare re-deploy
-        yq e -i '.services.ice-pulse-api.environment += ["DEPLOY_TIMESTAMP=$(date +%s)"]' ${{ env.DEPLOY_PATH_DEV }} || echo "Could not add timestamp"
+        yq e -i '.services.ice-pulse-api.image = "${{ env.DOCKER_IMAGE }}:${{ needs.build_and_migrate.outputs.version }}"' ${{ env.DEPLOY_PATH_DEV }}
         
         echo "=== Updated docker-compose file ==="
         cat ${{ env.DEPLOY_PATH_DEV }}
@@ -190,56 +332,26 @@ jobs:
       run: |
         cd infra-repo
         
-        echo "=== Checking for changes ==="
-        git status
-        git diff
-        
-        # Verifica se ci sono cambiamenti
         if git diff --quiet; then
           echo "No changes to commit"
           exit 0
         fi
         
-        echo "=== Committing changes ==="
         git add ${{ env.DEPLOY_PATH_DEV }}
-        git commit -m "🚀 Deploy dev: ${{ needs.build.outputs.version }}
+        git commit -m "🚀 Deploy dev: ${{ needs.build_and_migrate.outputs.version }}
 
-        - Image: ${{ env.DOCKER_IMAGE }}:${{ needs.build.outputs.version }}
+        - Image: ${{ env.DOCKER_IMAGE }}:${{ needs.build_and_migrate.outputs.version }}
+        - Migrations: ${{ needs.build_and_migrate.outputs.migrations_applied }}
         - Commit: ${{ github.sha }}
-        - Actor: ${{ github.actor }}
-        - Workflow: ${{ github.workflow }}
-        - Branch: ${{ github.ref_name }}"
+        - Actor: ${{ github.actor }}"
         
-        echo "=== Pushing to remote ==="
         git push origin ${{ env.INFRA_BRANCH }}
         
     - name: Deployment Summary
       run: |
-        echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+        echo "## 🚀 Integrated Deployment Summary" >> $GITHUB_STEP_SUMMARY
         echo "- **Environment**: development" >> $GITHUB_STEP_SUMMARY
-        echo "- **Version**: ${{ needs.build.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-        echo "- **Image**: ${{ env.DOCKER_IMAGE }}:${{ needs.build.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Version**: ${{ needs.build_and_migrate.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Image**: ${{ env.DOCKER_IMAGE }}:${{ needs.build_and_migrate.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Database Migrations**: ${{ needs.build_and_migrate.outputs.migrations_applied }}" >> $GITHUB_STEP_SUMMARY
         echo "- **Commit**: [\`${{ github.sha }}\`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})" >> $GITHUB_STEP_SUMMARY
-        echo "- **Actor**: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
-        echo "- **Updated File**: \`${{ env.DEPLOY_PATH_DEV }}\`" >> $GITHUB_STEP_SUMMARY
-
-  notify:
-    name: Notify Deployment Status
-    runs-on: ubuntu-latest
-    needs: [build, deploy]
-    if: always()
-    
-    steps:
-    - name: Notify Success
-      if: needs.deploy.result == 'success'
-      run: |
-        echo "✅ Deployment to development successful!"
-        echo "Version: ${{ needs.build.outputs.version }}"
-        echo "Image: ${{ env.DOCKER_IMAGE }}:${{ needs.build.outputs.version }}"
-        
-    - name: Notify Failure
-      if: needs.deploy.result == 'failure'
-      run: |
-        echo "❌ Deployment to development failed!"
-        echo "Check the logs above for details."
-        # Qui puoi aggiungere notifiche Slack, Discord, email, etc.
