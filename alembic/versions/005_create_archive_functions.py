@@ -579,9 +579,9 @@ def upgrade() -> None:
             RETURN QUERY SELECT 
                 'database_size'::TEXT,
                 CASE WHEN db_size_mb < 10000 THEN 'OK' ELSE 'INFO' END,
-                format('%.2f MB', db_size_mb)::TEXT,
+                format('%s MB', ROUND(db_size_mb, 2))::TEXT,
                 '<10GB'::TEXT,
-                format('Database size: %.2f MB', db_size_mb);
+                format('Database size: %s MB', db_size_mb);
             
             -- Check 5: RLS attivo
             RETURN QUERY SELECT 
