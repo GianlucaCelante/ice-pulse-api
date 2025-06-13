@@ -1,5 +1,4 @@
-# .github/workflows/deploy-dev-integrated.yml
-# DEPLOY INTEGRATO: Build + DB Migrations + Deploy
+# .github/workflows/deploy-dev.yml (FIXED)
 name: Deploy to Development (Integrated)
 
 on:
@@ -30,9 +29,6 @@ env:
   DEPLOY_PATH_DEV: devops/dev/docker-compose-api-dev.yml
 
 jobs:
-  # =====================================================
-  # JOB 1: BUILD + TEST + DB MIGRATIONS (tutto insieme)
-  # =====================================================
   build_and_migrate:
     name: Build, Test & Database Migrations
     runs-on: ubuntu-latest
@@ -88,9 +84,6 @@ jobs:
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         echo "Building version: $VERSION"
         
-    # =====================================================
-    # DATABASE MIGRATIONS (integrato nel build)
-    # =====================================================
     - name: Validate Migration Files
       run: |
         echo "=== Validating migration files ==="
@@ -102,14 +95,38 @@ jobs:
         
         migration_count=$(ls alembic/versions/*.py 2>/dev/null | wc -l)
         if [ $migration_count -eq 0 ]; then
-          echo "⚠️ No migration files found - this is OK for initial setup"
+          echo "⚠️ No migration files found"
+          echo "migrations_available=false" >> $GITHUB_ENV
         else
           echo "✅ Found $migration_count migration files"
           ls -la alembic/versions/
+          echo "migrations_available=true" >> $GITHUB_ENV
+          
+          # Validate migration file structure
+          for file in alembic/versions/*.py; do
+            if ! grep -q "revision = " "$file"; then
+              echo "❌ Missing revision ID in $file"
+              exit 1
+            fi
+            
+            if ! grep -q "def upgrade" "$file"; then
+              echo "❌ Missing upgrade() function in $file"
+              exit 1
+            fi
+            
+            if ! grep -q "def downgrade" "$file"; then
+              echo "❌ Missing downgrade() function in $file" 
+              exit 1
+            fi
+            
+            echo "✅ $file structure valid"
+          done
         fi
         
     - name: Test Database Migrations
-      if: github.event.inputs.skip_migrations != 'true'
+      if: |
+        github.event.inputs.skip_migrations != 'true' && 
+        env.migrations_available == 'true'
       id: apply_migrations
       env:
         DB_HOST: localhost
@@ -120,7 +137,7 @@ jobs:
       run: |
         echo "=== Testing database migrations ==="
         
-        # Check alembic config
+        # Check alembic config (non-autogenerate)
         alembic check
         
         # Show current state
@@ -129,10 +146,10 @@ jobs:
         
         # Show available migrations
         echo "Available migrations:"
-        alembic history || echo "No migrations found"
+        alembic history --verbose || echo "No migrations found"
         
-        # Apply migrations
-        echo "Applying migrations..."
+        # Apply migrations (MANUAL MIGRATIONS, not autogenerate)
+        echo "Applying manual migrations..."
         alembic upgrade head
         
         # Verify final state
@@ -147,17 +164,38 @@ jobs:
           ORDER BY table_name;
         "
         
+        # Count tables created
+        table_count=$(PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -t -c "
+          SELECT COUNT(*) FROM information_schema.tables 
+          WHERE table_schema = 'public' AND table_type = 'BASE TABLE';
+        " | xargs)
+        
+        echo "Tables created: $table_count"
+        
+        if [ "$table_count" -gt 5 ]; then
+          echo "✅ Database schema created successfully"
+          echo "migrations_applied=true" >> $GITHUB_OUTPUT
+        else
+          echo "❌ Expected more tables, migration may have failed"
+          echo "migrations_applied=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+        
         # Test health check function (se esiste)
         PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -c "
           SELECT * FROM system_health_check() LIMIT 3;
-        " || echo "Health check function not available (may be normal)"
+        " || echo "⚠️ Health check function not available (may be normal for some migration stages)"
         
-        echo "migrations_applied=true" >> $GITHUB_OUTPUT
         echo "✅ Database migrations completed successfully"
         
-    # =====================================================
-    # APPLICATION TESTS
-    # =====================================================
+    - name: Skip Migrations Notice
+      if: |
+        github.event.inputs.skip_migrations == 'true' || 
+        env.migrations_available != 'true'
+      run: |
+        echo "⚠️ Database migrations skipped"
+        echo "migrations_applied=skipped" >> $GITHUB_OUTPUT
+        
     - name: Run Application Tests
       env:
         DB_HOST: localhost
@@ -170,9 +208,6 @@ jobs:
         # pytest --cov=. --cov-report=xml --cov-report=term
         echo "✅ Test phase completed"
         
-    # =====================================================
-    # DOCKER BUILD
-    # =====================================================
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
       
@@ -195,9 +230,6 @@ jobs:
         build-args: |
           VERSION=${{ steps.get_version.outputs.version }}
 
-  # =====================================================
-  # JOB 2: APPLY MIGRATIONS TO DEV DATABASE (se necessario)
-  # =====================================================
   apply_dev_migrations:
     name: Apply Migrations to Dev Database
     runs-on: ubuntu-latest
@@ -230,22 +262,17 @@ jobs:
       run: |
         echo "=== Applying migrations to DEV database ==="
         
-        # Show current state
         echo "Current revision before migration:"
         alembic current || echo "No current revision"
         
-        # Apply migrations
+        echo "Applying migrations..."
         alembic upgrade head
         
-        # Verify final state
         echo "Final revision after migration:"
         alembic current
         
         echo "✅ Dev database migrations applied"
 
-  # =====================================================
-  # JOB 3: DEPLOY TO INFRASTRUCTURE
-  # =====================================================
   deploy:
     name: Update Infrastructure Repository
     runs-on: ubuntu-latest
@@ -292,16 +319,10 @@ jobs:
               - "8080:80"
             environment:
               - ENVIRONMENT=development
-              - DB_HOST=${{ secrets.DEV_DB_HOST }}
-              - DB_PORT=${{ secrets.DEV_DB_PORT }}
-              - DB_NAME=${{ secrets.DEV_DB_NAME }}
-              - DB_USER=${{ secrets.DEV_DB_USER }}
-              - DB_PASSWORD=${{ secrets.DEV_DB_PASSWORD }}
             restart: unless-stopped
         EOF
         fi
         
-        # Update image version
         yq e -i '.services.ice-pulse-api.image = "${{ env.DOCKER_IMAGE }}:${{ needs.build_and_migrate.outputs.version }}"' ${{ env.DEPLOY_PATH_DEV }}
         
         echo "=== Updated docker-compose file ==="
@@ -334,37 +355,3 @@ jobs:
         echo "- **Image**: ${{ env.DOCKER_IMAGE }}:${{ needs.build_and_migrate.outputs.version }}" >> $GITHUB_STEP_SUMMARY
         echo "- **Database Migrations**: ${{ needs.build_and_migrate.outputs.migrations_applied }}" >> $GITHUB_STEP_SUMMARY
         echo "- **Commit**: [\`${{ github.sha }}\`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})" >> $GITHUB_STEP_SUMMARY
-
-  # =====================================================
-  # JOB 4: HEALTH CHECK POST-DEPLOY
-  # =====================================================
-  health_check:
-    name: Post-Deploy Health Check
-    runs-on: ubuntu-latest
-    needs: [build_and_migrate, deploy]
-    if: always() && needs.deploy.result == 'success'
-    
-    steps:
-    - name: Wait for Deployment
-      run: |
-        echo "Waiting 60 seconds for deployment to stabilize..."
-        sleep 60
-        
-    - name: Health Check API
-      run: |
-        echo "=== Checking API health ==="
-        
-        # Test API endpoint (adjust URL based on your setup)
-        API_URL="http://dev.ice-pulse.your-domain.com/health"  # Adjust this
-        
-        for i in {1..5}; do
-          if curl -f -s --max-time 10 "$API_URL" > /dev/null; then
-            echo "✅ API health check passed (attempt $i)"
-            break
-          else
-            echo "⚠️ API health check failed (attempt $i), retrying..."
-            sleep 10
-          fi
-        done
-        
-        echo "✅ Health check completed"

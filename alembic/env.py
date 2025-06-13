@@ -9,11 +9,11 @@ from pathlib import Path
 # Aggiungi src path per import models (quando li avremo)
 sys.path.append(str(Path(__file__).parent.parent / "src"))
 
-# Import dei models per auto-generation (quando li creeremo)
+# Import dei models per auto-generation (DISABILITATO per migrations manuali)
 # from src.models import Base
 # target_metadata = Base.metadata
 
-# Per ora, metadata vuoto (usiamo migrations manuali)
+# Per migrations manuali, target_metadata deve essere None
 target_metadata = None
 
 # Configurazione Alembic
@@ -31,6 +31,7 @@ def get_database_url():
     DB_PORT = os.getenv("DB_PORT", "5432")
     DB_NAME = os.getenv("DB_NAME", "icepulse")
     
+    # Usa psycopg2 per Alembic (sincrono), non asyncpg
     return f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
 def run_migrations_offline() -> None:
