@@ -285,12 +285,6 @@ def upgrade() -> None:
     # INDICI PER STATISTICHE E ANALYTICS
     # =====================================================
     
-    # Statistiche uso per organization (aggregazione daily)
-    op.execute("""
-        CREATE INDEX idx_readings_stats_daily 
-        ON readings (organization_id, (timestamp::date), sensor_id)
-    """)
-    
     # Performance monitoring: battery basso
     op.execute("""
         CREATE INDEX idx_sensors_battery_low 
