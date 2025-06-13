@@ -2,7 +2,7 @@
 
 Revision ID: 001
 Revises: 
-Create Date: 2025-01-01 10:00:00.000000
+Create Date: 2025-06-13 10:00:00.000000
 
 Crea le tabelle base per Ice Pulse HACCP system:
 - organizations (multi-tenancy)
@@ -23,9 +23,11 @@ branch_labels = None
 depends_on = None
 
 def upgrade() -> None:
-    """Crea tabelle base"""
+    """Crea tabelle base per Ice Pulse HACCP"""
     
+    # =====================================================
     # 1. ORGANIZATIONS (Multi-tenancy)
+    # =====================================================
     op.create_table(
         'organizations',
         sa.Column('id', postgresql.UUID(as_uuid=True), primary_key=True, 
@@ -52,7 +54,9 @@ def upgrade() -> None:
         sa.CheckConstraint('retention_months >= 6', name='chk_retention_min_6_months'),
     )
     
+    # =====================================================
     # 2. USERS (Authentication & Authorization)
+    # =====================================================
     op.create_table(
         'users',
         sa.Column('id', postgresql.UUID(as_uuid=True), primary_key=True,
@@ -91,7 +95,9 @@ def upgrade() -> None:
                           name='chk_failed_attempts_positive'),
     )
     
+    # =====================================================
     # 3. LOCATIONS (Dove sono fisicamente i sensori)
+    # =====================================================
     op.create_table(
         'locations',
         sa.Column('id', postgresql.UUID(as_uuid=True), primary_key=True,
@@ -110,7 +116,7 @@ def upgrade() -> None:
         # Physical location info
         sa.Column('floor', sa.String(20), nullable=True),
         sa.Column('zone', sa.String(50), nullable=True),
-        sa.Column('coordinates', postgresql.JSONB, nullable=True),  # {lat, lng} se serve
+        sa.Column('coordinates', postgresql.JSONB, nullable=True),
         
         # Audit timestamps
         sa.Column('created_at', sa.TIMESTAMP(timezone=True), nullable=False,
@@ -127,11 +133,15 @@ def upgrade() -> None:
             "location_type IN ('freezer', 'fridge', 'cold_room', 'outdoor', 'kitchen', 'storage')", 
             name='chk_location_type_valid'
         ),
-        sa.CheckConstraint('temperature_min IS NULL OR temperature_max IS NULL OR temperature_min < temperature_max', 
-                          name='chk_temperature_range_valid'),
+        sa.CheckConstraint(
+            'temperature_min IS NULL OR temperature_max IS NULL OR temperature_min < temperature_max', 
+            name='chk_temperature_range_valid'
+        ),
     )
     
+    # =====================================================
     # 4. SENSORS (Dispositivi IoT)
+    # =====================================================
     op.create_table(
         'sensors',
         sa.Column('id', postgresql.UUID(as_uuid=True), primary_key=True,
@@ -191,7 +201,9 @@ def upgrade() -> None:
                           name='chk_accuracy_positive'),
     )
     
+    # =====================================================
     # 5. ALERTS (Sistema di allarmi)
+    # =====================================================
     op.create_table(
         'alerts',
         sa.Column('id', postgresql.UUID(as_uuid=True), primary_key=True,
@@ -251,7 +263,9 @@ def upgrade() -> None:
         ),
     )
     
+    # =====================================================
     # 6. AUDIT_LOG (HACCP compliance - tracciabilità)
+    # =====================================================
     op.create_table(
         'audit_log',
         sa.Column('id', postgresql.UUID(as_uuid=True), primary_key=True,
@@ -293,8 +307,64 @@ def upgrade() -> None:
         ),
     )
 
+    # =====================================================
+    # 7. TRIGGER PER AUTO-UPDATE TIMESTAMPS
+    # =====================================================
+    op.execute("""
+        -- Function per auto-update di updated_at
+        CREATE OR REPLACE FUNCTION update_updated_at_column()
+        RETURNS TRIGGER AS $$
+        BEGIN
+            NEW.updated_at = CURRENT_TIMESTAMP;
+            RETURN NEW;
+        END;
+        $$ language 'plpgsql';
+        
+        -- Trigger per organizations
+        CREATE TRIGGER tr_organizations_updated_at
+            BEFORE UPDATE ON organizations
+            FOR EACH ROW
+            EXECUTE FUNCTION update_updated_at_column();
+            
+        -- Trigger per users
+        CREATE TRIGGER tr_users_updated_at
+            BEFORE UPDATE ON users
+            FOR EACH ROW
+            EXECUTE FUNCTION update_updated_at_column();
+            
+        -- Trigger per locations
+        CREATE TRIGGER tr_locations_updated_at
+            BEFORE UPDATE ON locations
+            FOR EACH ROW
+            EXECUTE FUNCTION update_updated_at_column();
+            
+        -- Trigger per sensors
+        CREATE TRIGGER tr_sensors_updated_at
+            BEFORE UPDATE ON sensors
+            FOR EACH ROW
+            EXECUTE FUNCTION update_updated_at_column();
+            
+        -- Trigger per alerts
+        CREATE TRIGGER tr_alerts_updated_at
+            BEFORE UPDATE ON alerts
+            FOR EACH ROW
+            EXECUTE FUNCTION update_updated_at_column();
+    """)
+
 def downgrade() -> None:
-    """Rimuove tutte le tabelle base"""
+    """Rimuove tutte le tabelle base e trigger"""
+    
+    # Drop trigger
+    op.execute("""
+        DROP TRIGGER IF EXISTS tr_alerts_updated_at ON alerts;
+        DROP TRIGGER IF EXISTS tr_sensors_updated_at ON sensors;
+        DROP TRIGGER IF EXISTS tr_locations_updated_at ON locations;
+        DROP TRIGGER IF EXISTS tr_users_updated_at ON users;
+        DROP TRIGGER IF EXISTS tr_organizations_updated_at ON organizations;
+        DROP FUNCTION IF EXISTS update_updated_at_column();
+    """)
+    
+    # Drop tables (ordine inverso per FK)
     op.drop_table('audit_log')
     op.drop_table('alerts')
     op.drop_table('sensors')
