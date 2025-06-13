@@ -1,4 +1,4 @@
-# .github/workflows/deploy-dev.yml
+# .github/workflows/deploy-dev.yml (FIXED)
 name: Deploy to Development (Integrated)
 
 on:
@@ -119,6 +119,12 @@ jobs:
               exit 1
             fi
             
+            # Test Python syntax
+            python -m py_compile "$file" || {
+              echo "❌ Syntax error in $file"
+              exit 1
+            }
+            
             echo "✅ $file structure valid"
           done
         fi
@@ -137,7 +143,10 @@ jobs:
       run: |
         echo "=== Testing database migrations ==="
         
-        # Show current state (without alembic check)
+        # Skip alembic check (causes autogenerate issues)
+        # alembic check
+        
+        # Show current state
         echo "Current revision:"
         alembic current || echo "No current revision (fresh DB)"
         
@@ -145,8 +154,30 @@ jobs:
         echo "Available migrations:"
         alembic history --verbose || echo "No migrations found"
         
+        # Debug: Check if Alembic sees the migrations
+        echo "=== DEBUG: Migration file check ==="
+        python -c "
+        import sys
+        sys.path.append('.')
+        from alembic import command
+        from alembic.config import Config
+        
+        cfg = Config('alembic.ini')
+        try:
+            command.history(cfg, verbose=True)
+            print('✅ Alembic config and history working')
+        except Exception as e:
+            print(f'❌ Alembic error: {e}')
+            import traceback
+            traceback.print_exc()
+        "
+        
         # Apply migrations (MANUAL MIGRATIONS, not autogenerate)
         echo "Applying manual migrations..."
+        alembic upgrade head --sql > migration_debug.sql || true
+        echo "=== Generated SQL preview ==="
+        head -20 migration_debug.sql || echo "No SQL generated"
+        
         alembic upgrade head
         
         # Verify final state
@@ -202,6 +233,7 @@ jobs:
         DB_PASSWORD: test_password
       run: |
         echo "=== Running application tests ==="
+        # pytest --cov=. --cov-report=xml --cov-report=term
         echo "✅ Test phase completed"
         
     - name: Set up Docker Buildx
@@ -226,10 +258,53 @@ jobs:
         build-args: |
           VERSION=${{ steps.get_version.outputs.version }}
 
+  apply_dev_migrations:
+    name: Apply Migrations to Dev Database
+    runs-on: ubuntu-latest
+    needs: build_and_migrate
+    if: |
+      needs.build_and_migrate.outputs.migrations_applied == 'true' &&
+      github.event.inputs.skip_migrations != 'true'
+    
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Install Dependencies
+      run: |
+        pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Apply Dev Database Migrations
+      env:
+        DB_HOST: ${{ secrets.DEV_DB_HOST }}
+        DB_PORT: ${{ secrets.DEV_DB_PORT }}
+        DB_NAME: ${{ secrets.DEV_DB_NAME }}
+        DB_USER: ${{ secrets.DEV_DB_USER }}
+        DB_PASSWORD: ${{ secrets.DEV_DB_PASSWORD }}
+      run: |
+        echo "=== Applying migrations to DEV database ==="
+        
+        echo "Current revision before migration:"
+        alembic current || echo "No current revision"
+        
+        echo "Applying migrations..."
+        alembic upgrade head
+        
+        echo "Final revision after migration:"
+        alembic current
+        
+        echo "✅ Dev database migrations applied"
+
   deploy:
     name: Update Infrastructure Repository
     runs-on: ubuntu-latest
-    needs: build_and_migrate
+    needs: [build_and_migrate, apply_dev_migrations]
     if: always() && needs.build_and_migrate.result == 'success'
     
     steps:
