@@ -288,7 +288,7 @@ def upgrade() -> None:
     # Statistiche uso per organization (aggregazione daily)
     op.execute("""
         CREATE INDEX idx_readings_stats_daily 
-        ON readings (organization_id, DATE(timestamp), sensor_id)
+        ON readings (organization_id, (timestamp::date), sensor_id)
     """)
     
     # Performance monitoring: battery basso
