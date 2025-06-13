@@ -1,19 +1,10 @@
-# alembic/env.py - Environment setup per migrations Ice Pulse
+# alembic/env.py - DEBUG VERSION per trovare il problema
 from logging.config import fileConfig
 from sqlalchemy import engine_from_config, pool
 from alembic import context
 import os
-import sys
-from pathlib import Path
 
-# Aggiungi src path per import models (quando li avremo)
-sys.path.append(str(Path(__file__).parent.parent / "src"))
-
-# Import dei models per auto-generation (DISABILITATO per migrations manuali)
-# from src.models import Base
-# target_metadata = Base.metadata
-
-# Per migrations manuali, target_metadata deve essere None
+# CRITICAL: target_metadata MUST be None for manual migrations
 target_metadata = None
 
 # Configurazione Alembic
@@ -37,15 +28,13 @@ def get_database_url():
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""
     url = get_database_url()
+    
     context.configure(
         url=url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
-        # Configurazioni specifiche Ice Pulse
-        compare_type=True,
-        compare_server_default=True,
-        render_as_batch=False,
+        # NO autogenerate options here
     )
 
     with context.begin_transaction():
@@ -67,12 +56,7 @@ def run_migrations_online() -> None:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
-            # Configurazioni specifiche Ice Pulse
-            compare_type=True,
-            compare_server_default=True,
-            render_as_batch=False,
-            # Include schemi per RLS
-            include_schemas=True,
+            # NO autogenerate options here either
         )
 
         with context.begin_transaction():
