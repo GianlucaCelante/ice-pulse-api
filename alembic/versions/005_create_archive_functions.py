@@ -537,8 +537,8 @@ def upgrade() -> None:
             db_size_mb NUMERIC;
         BEGIN
             -- Check 1: Numero partizioni readings
-            SELECT count(*) FROM pg_tables
-            WHERE tablename LIKE 'readings_%' AND schemaname = 'public'
+            SELECT count(*) INTO partition_count FROM pg_tables
+            WHERE tablename LIKE 'readings_%%' AND schemaname = 'public';
             
             RETURN QUERY SELECT 
                 'partition_count'::TEXT,
