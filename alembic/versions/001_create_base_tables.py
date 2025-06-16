@@ -36,7 +36,7 @@ def upgrade() -> None:
         sa.Column('slug', sa.String(100), nullable=False, unique=True),
         sa.Column('subscription_plan', sa.String(20), nullable=False, default='free'),
         sa.Column('max_sensors', sa.Integer, nullable=False, default=10),
-        sa.Column('timezone', sa.String(50), nullable=False, default='Europe/Rome'),
+        sa.Column('timezone', sa.String(50), nullable=False, default='UTC'),  # FIX: UTC default
         
         # Configurazioni HACCP specifiche
         sa.Column('haccp_settings', postgresql.JSONB, nullable=True),
@@ -52,6 +52,11 @@ def upgrade() -> None:
         # Constraints
         sa.CheckConstraint('max_sensors > 0', name='chk_max_sensors_positive'),
         sa.CheckConstraint('retention_months >= 6', name='chk_retention_min_6_months'),
+        # FIX: Validazione JSONB haccp_settings
+        sa.CheckConstraint(
+            "haccp_settings IS NULL OR (haccp_settings ? 'temperature_min' AND haccp_settings ? 'temperature_max')", 
+            name='chk_haccp_settings_structure'
+        ),
     )
     
     # =====================================================
@@ -63,7 +68,7 @@ def upgrade() -> None:
                  server_default=sa.text('gen_random_uuid()')),
         sa.Column('organization_id', postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column('email', sa.String(255), nullable=False, unique=True),
-        sa.Column('password_hash', sa.String(255), nullable=False),
+        sa.Column('password_hash', sa.Text, nullable=False),  # FIX: TEXT invece di String(255)
         sa.Column('first_name', sa.String(100), nullable=True),
         sa.Column('last_name', sa.String(100), nullable=True),
         sa.Column('role', sa.String(20), nullable=False, default='operator'),
@@ -84,15 +89,14 @@ def upgrade() -> None:
         sa.Column('updated_at', sa.TIMESTAMP(timezone=True), nullable=False,
                  server_default=sa.func.now()),
                  
-        # Foreign Keys
+        # Foreign Keys - FIX: CASCADE per dev/testing
         sa.ForeignKeyConstraint(['organization_id'], ['organizations.id'], 
-                              ondelete='RESTRICT', name='fk_users_organization'),
+                              ondelete='CASCADE', name='fk_users_organization'),
                               
         # Constraints
         sa.CheckConstraint("role IN ('admin', 'manager', 'operator', 'viewer')", 
                           name='chk_user_role_valid'),
-        sa.CheckConstraint('failed_login_attempts >= 0', 
-                          name='chk_failed_attempts_positive'),
+        # RIMOSSO: failed_login_attempts >= 0 (ridondante)
     )
     
     # =====================================================
@@ -124,9 +128,9 @@ def upgrade() -> None:
         sa.Column('updated_at', sa.TIMESTAMP(timezone=True), nullable=False,
                  server_default=sa.func.now()),
                  
-        # Foreign Keys
+        # Foreign Keys - FIX: CASCADE
         sa.ForeignKeyConstraint(['organization_id'], ['organizations.id'], 
-                              ondelete='RESTRICT', name='fk_locations_organization'),
+                              ondelete='CASCADE', name='fk_locations_organization'),
                               
         # Constraints
         sa.CheckConstraint(
@@ -136,6 +140,11 @@ def upgrade() -> None:
         sa.CheckConstraint(
             'temperature_min IS NULL OR temperature_max IS NULL OR temperature_min < temperature_max', 
             name='chk_temperature_range_valid'
+        ),
+        # FIX: Validazione coordinates JSONB
+        sa.CheckConstraint(
+            "coordinates IS NULL OR (coordinates ? 'lat' AND coordinates ? 'lng')", 
+            name='chk_coordinates_structure'
         ),
     )
     
@@ -178,9 +187,9 @@ def upgrade() -> None:
         sa.Column('updated_at', sa.TIMESTAMP(timezone=True), nullable=False,
                  server_default=sa.func.now()),
                  
-        # Foreign Keys  
+        # Foreign Keys - FIX: CASCADE per organization, SET NULL per location  
         sa.ForeignKeyConstraint(['organization_id'], ['organizations.id'], 
-                              ondelete='RESTRICT', name='fk_sensors_organization'),
+                              ondelete='CASCADE', name='fk_sensors_organization'),
         sa.ForeignKeyConstraint(['location_id'], ['locations.id'], 
                               ondelete='SET NULL', name='fk_sensors_location'),
                               
@@ -199,6 +208,16 @@ def upgrade() -> None:
                           name='chk_reading_interval_positive'),
         sa.CheckConstraint('accuracy_specification > 0', 
                           name='chk_accuracy_positive'),
+        # FIX: Validazione MAC address format
+        sa.CheckConstraint(
+            "mac_address IS NULL OR mac_address ~ '^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$'", 
+            name='chk_mac_address_format'
+        ),
+        # FIX: Validazione alert_thresholds JSONB
+        sa.CheckConstraint(
+            "alert_thresholds IS NULL OR (alert_thresholds ? 'temperature' OR alert_thresholds ? 'humidity')", 
+            name='chk_alert_thresholds_structure'
+        ),
     )
     
     # =====================================================
@@ -238,11 +257,11 @@ def upgrade() -> None:
         sa.Column('updated_at', sa.TIMESTAMP(timezone=True), nullable=False,
                  server_default=sa.func.now()),
                  
-        # Foreign Keys
+        # Foreign Keys - FIX: CASCADE per organization, SET NULL per sensor/users
         sa.ForeignKeyConstraint(['organization_id'], ['organizations.id'], 
-                              ondelete='RESTRICT', name='fk_alerts_organization'),
+                              ondelete='CASCADE', name='fk_alerts_organization'),
         sa.ForeignKeyConstraint(['sensor_id'], ['sensors.id'], 
-                              ondelete='RESTRICT', name='fk_alerts_sensor'),
+                              ondelete='SET NULL', name='fk_alerts_sensor'),
         sa.ForeignKeyConstraint(['acknowledged_by'], ['users.id'], 
                               ondelete='SET NULL', name='fk_alerts_acknowledged_by'),
         sa.ForeignKeyConstraint(['resolved_by'], ['users.id'], 
@@ -294,9 +313,9 @@ def upgrade() -> None:
         sa.Column('created_at', sa.TIMESTAMP(timezone=True), nullable=False,
                  server_default=sa.func.now()),
                  
-        # Foreign Keys
+        # Foreign Keys - FIX: SET NULL per consentire audit dopo cancellazione
         sa.ForeignKeyConstraint(['organization_id'], ['organizations.id'], 
-                              ondelete='RESTRICT', name='fk_audit_log_organization'),
+                              ondelete='SET NULL', name='fk_audit_log_organization'),
         sa.ForeignKeyConstraint(['user_id'], ['users.id'], 
                               ondelete='SET NULL', name='fk_audit_log_user'),
                               

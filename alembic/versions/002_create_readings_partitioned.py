@@ -266,7 +266,7 @@ def upgrade() -> None:
     # =====================================================
     op.execute("""
         CREATE OR REPLACE FUNCTION archive_old_readings(archive_months_ago INTEGER DEFAULT 24)
-        RETURNS TEXT AS $
+        RETURNS TEXT AS $$
         DECLARE
             archive_date DATE;
             partition_name TEXT;
@@ -307,7 +307,7 @@ def upgrade() -> None:
             
             RETURN result;
         END;
-        $ LANGUAGE plpgsql;
+        $$ LANGUAGE plpgsql;
     """)
     
     # =====================================================
@@ -336,7 +336,7 @@ def downgrade() -> None:
     
     # Drop partizioni esistenti (se presenti)
     op.execute("""
-        DO $
+        DO $$
         DECLARE
             partition_name TEXT;
         BEGIN
@@ -348,7 +348,7 @@ def downgrade() -> None:
             LOOP
                 EXECUTE 'DROP TABLE IF EXISTS ' || partition_name || ' CASCADE';
             END LOOP;
-        END $;
+        END $$;
     """)
     
     # Drop tabelle

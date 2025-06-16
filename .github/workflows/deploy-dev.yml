@@ -262,6 +262,7 @@ jobs:
     name: Apply Migrations to Dev Database
     runs-on: ubuntu-latest
     needs: build_and_migrate
+    environment: dev
     if: |
       needs.build_and_migrate.outputs.migrations_applied == 'true' &&
       github.event.inputs.skip_migrations != 'true'
