@@ -1,0 +1,13 @@
+-r requirements.txt
+
+# ======================================
+# CI/CD SPECIFIC TOOLS
+# ======================================
+
+# Security scanning
+bandit==1.7.5
+safety==3.5.2
+
+# CI reporting
+pytest-html==4.1.1
+pytest-xdist==3.5.0  # Parallel tests
