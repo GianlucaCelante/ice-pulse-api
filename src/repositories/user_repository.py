@@ -428,14 +428,16 @@ class UserRepository:
         Returns:
             List[User]: Lista utenti con certificazione in scadenza
         """
-        from sqlalchemy import Date
-        expiry_threshold = func.current_date() + func.cast(func.make_interval(days=days_ahead), Date)
+        from datetime import date, timedelta
+        
+        # Calcola la data di soglia usando Python invece di PostgreSQL
+        expiry_threshold = date.today() + timedelta(days=days_ahead)
         
         query = select(User).where(
             and_(
                 User.haccp_certificate_expiry.isnot(None),
                 User.haccp_certificate_expiry <= expiry_threshold,
-                User.haccp_certificate_expiry > func.current_date(),
+                User.haccp_certificate_expiry > date.today(),  # Non ancora scaduta
                 User.is_active == True
             )
         )

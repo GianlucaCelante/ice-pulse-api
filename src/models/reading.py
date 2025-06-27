@@ -7,6 +7,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from datetime import datetime
 from typing import Optional
 import uuid
+from decimal import Decimal
 
 from .base import BaseModel
 
@@ -63,11 +64,10 @@ class Reading(BaseModel):
     # SENSOR MEASUREMENTS
     # ==========================================
     
-    temperature: Mapped[Optional[float]] = mapped_column(DECIMAL(6,3), nullable=True)  # -40.000 to 999.999
-    humidity: Mapped[Optional[float]] = mapped_column(DECIMAL(5,2), nullable=True)     # 0.00 to 100.00
-    pressure: Mapped[Optional[float]] = mapped_column(DECIMAL(7,2), nullable=True)     # Pressure in mbar
-    battery_voltage: Mapped[Optional[float]] = mapped_column(DECIMAL(4,3), nullable=True)  # Battery voltage
-    
+    temperature: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(6,3), nullable=True)  # -40.000 to 999.999
+    humidity: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(5,2), nullable=True)     # 0.00 to 100.00
+    pressure: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(7,2), nullable=True)     # Pressure in mbar
+    battery_voltage: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(4,3), nullable=True)  # 0.000 to 5.000    
     # ==========================================
     # DATA QUALITY
     # ==========================================
