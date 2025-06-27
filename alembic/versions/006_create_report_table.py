@@ -21,3 +21,6 @@ depends_on = None
 def upgrade() -> None:
     # La tabella sarà creata automaticamente dai modelli SQLAlchemy
     pass
+
+def downgrade() -> None:
+    pass
