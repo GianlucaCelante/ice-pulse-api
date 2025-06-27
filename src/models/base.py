@@ -1,89 +1,59 @@
-# src/models/base.py
-"""
-Base model class che tutti gli altri models erediteranno.
-FIXED per SQLAlchemy 2.0
-"""
-
-# IMPORTS - FIXED per SQLAlchemy 2.0
-from sqlalchemy import Column, TIMESTAMP, func
+# =====================================================
+# src/models/base.py - COMPLETAMENTE REFACTORED
+# =====================================================
+from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import declarative_base  # ← FIXED: import corretto
-import uuid
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from datetime import datetime
 from typing import Dict, Any
+import uuid
 
-# FIXED: Import corretto per SQLAlchemy 2.0
-Base = declarative_base()
+class Base(DeclarativeBase):
+    """SQLAlchemy 2.0 declarative base"""
+    pass
 
 class BaseModel(Base):
     """
-    Classe base per tutti i models.
+    Base model per tutti i modelli con SQLAlchemy 2.0 syntax.
     
-    COSA FA:
-    - Aggiunge automaticamente id, created_at, updated_at a ogni tabella
-    - Fornisce metodi comuni come to_dict()
-    - Gestisce automaticamente gli UUID come primary key
+    NOVITÀ SQLAlchemy 2.0:
+    - Mapped[type] invece di Column()
+    - mapped_column() con typing completo
+    - DeclarativeBase invece di declarative_base()
     """
     
     __abstract__ = True
     
-    # PRIMARY KEY: UUID invece di auto-increment integer
-    id = Column(
-        UUID(as_uuid=True),
-        primary_key=True,
+    # Primary key con UUID
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), 
+        primary_key=True, 
         default=uuid.uuid4
     )
     
-    # TIMESTAMPS AUTOMATICI
-    created_at = Column(
-        TIMESTAMP(timezone=True),
-        nullable=False,
+    # Timestamps automatici
+    created_at: Mapped[datetime] = mapped_column(
         server_default=func.now()
     )
     
-    updated_at = Column(
-        TIMESTAMP(timezone=True),
-        nullable=False,
+    updated_at: Mapped[datetime] = mapped_column(
         server_default=func.now(),
         onupdate=func.now()
     )
     
     def __repr__(self) -> str:
-        """Rappresentazione per developer"""
+        """Rappresentazione debug"""
         return f"<{self.__class__.__name__}(id={self.id})>"
     
     def to_dict(self) -> Dict[str, Any]:
-        """Converte il model in dizionario per API JSON"""
+        """Converte in dizionario per JSON API"""
         result = {}
-        
-        for column in self.__table__.columns:
-            value = getattr(self, column.name)
-            
-            if value is not None:
+        for key, value in self.__dict__.items():
+            if not key.startswith('_'):  # Skip SQLAlchemy internal attrs
                 if isinstance(value, uuid.UUID):
-                    result[column.name] = str(value)
+                    result[key] = str(value)
                 elif isinstance(value, datetime):
-                    result[column.name] = value.isoformat()
+                    result[key] = value.isoformat()
                 else:
-                    result[column.name] = value
-            else:
-                result[column.name] = None
-        
+                    result[key] = value
         return result
-    
-    def update_from_dict(self, data: Dict[str, Any]) -> None:
-        """Aggiorna il model da un dizionario"""
-        valid_columns = {column.name for column in self.__table__.columns}
-        
-        for key, value in data.items():
-            if key in valid_columns and key not in ('id', 'created_at'):
-                setattr(self, key, value)
-    
-    @classmethod
-    def get_table_name(cls) -> str:
-        """Ritorna il nome della tabella"""
-        return cls.__tablename__
-    
-    def is_new(self) -> bool:
-        """Verifica se è un record nuovo (non ancora salvato)"""
-        return getattr(self, 'created_at', None) is None
