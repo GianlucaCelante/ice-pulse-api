@@ -84,7 +84,7 @@ class Calibration(BaseModel):
     
     scheduled_date: Mapped[Optional[datetime]] = mapped_column(nullable=True)
     calibrated_at: Mapped[datetime] = mapped_column(server_default=func.now())
-    next_calibration_due: Mapped[date] = mapped_column(Date)
+    next_calibration_due: Mapped[datetime] = mapped_column()
     
     # ==========================================
     # CONSTRAINTS
@@ -120,7 +120,8 @@ class Calibration(BaseModel):
     @property
     def days_until_due(self) -> int:
         """Giorni rimanenti fino alla prossima calibrazione"""
-        delta = self.next_calibration_due - date.today()
+        today_datetime = datetime.combine(date.today(), datetime.min.time())
+        delta = self.next_calibration_due - today_datetime
         return delta.days
     
     def mark_as_passed(self, accuracy: float, notes: Optional[str] = None) -> None:
