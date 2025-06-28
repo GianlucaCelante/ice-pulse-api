@@ -34,16 +34,18 @@ class CalibrationRepository(BaseRepository[Calibration]):
             desc(Calibration.calibrated_at)
         ).first()
     
-    def get_passed_calibrations(self, organization_id: uuid.UUID, start_date: date, end_date: date) -> List[Calibration]:
-        """Get passed calibrations in date range"""
+    def get_passed_calibrations(self, org_id: uuid.UUID, start_date: date, end_date: date):
+        start_datetime = datetime.combine(start_date, datetime.min.time())
+        end_datetime = datetime.combine(end_date, datetime.max.time())
+        
         return self.db.query(Calibration).filter(
             and_(
-                Calibration.organization_id == organization_id,
+                Calibration.organization_id == org_id,
                 Calibration.calibration_passed == True,
-                Calibration.calibrated_at >= start_date,
-                Calibration.calibrated_at <= end_date
+                Calibration.calibrated_at >= start_datetime,
+                Calibration.calibrated_at <= end_datetime
             )
-        ).order_by(desc(Calibration.calibrated_at)).all()
+        ).all()
     
     def get_failed_calibrations(self, organization_id: uuid.UUID, start_date: date, end_date: date) -> List[Calibration]:
         """Get failed calibrations in date range"""
