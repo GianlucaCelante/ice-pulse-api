@@ -67,19 +67,35 @@ def upgrade() -> None:
         sa.Column('id', postgresql.UUID(as_uuid=True), primary_key=True,
                  server_default=sa.text('gen_random_uuid()')),
         sa.Column('organization_id', postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column('email', sa.String(255), nullable=False, unique=True),
-        sa.Column('password_hash', sa.Text, nullable=False),  # FIX: TEXT invece di String(255)
-        sa.Column('first_name', sa.String(100), nullable=True),
-        sa.Column('last_name', sa.String(100), nullable=True),
-        sa.Column('role', sa.String(20), nullable=False, default='operator'),
         
-        # Account status
+        # ==========================================
+        # FASTAPI-USERS REQUIRED FIELDS
+        # ==========================================
+        sa.Column('email', sa.String(255), nullable=False, unique=True),
+        sa.Column('hashed_password', sa.Text, nullable=False),
         sa.Column('is_active', sa.Boolean, nullable=False, default=True),
         sa.Column('is_verified', sa.Boolean, nullable=False, default=False),
+        sa.Column('is_superuser', sa.Boolean, nullable=False, default=False),
+        
+        # ==========================================
+        # ICE PULSE CUSTOM FIELDS
+        # ==========================================
+        
+        # Personal info
+        sa.Column('first_name', sa.String(100), nullable=True),
+        sa.Column('last_name', sa.String(100), nullable=True),
+        
+        # Authorization
+        sa.Column('role', sa.String(20), nullable=False, default='operator'),
+        
+        # Contact info
+        sa.Column('phone', sa.String(20), nullable=True),
+        
+        # Login tracking
         sa.Column('last_login_at', sa.TIMESTAMP(timezone=True), nullable=True),
         sa.Column('failed_login_attempts', sa.Integer, nullable=False, default=0),
         
-        # HACCP specific
+        # HACCP compliance
         sa.Column('haccp_certificate_number', sa.String(100), nullable=True),
         sa.Column('haccp_certificate_expiry', sa.Date, nullable=True),
         
@@ -89,14 +105,19 @@ def upgrade() -> None:
         sa.Column('updated_at', sa.TIMESTAMP(timezone=True), nullable=False,
                  server_default=sa.func.now()),
                  
-        # Foreign Keys - FIX: CASCADE per dev/testing
+        # Foreign Keys
         sa.ForeignKeyConstraint(['organization_id'], ['organizations.id'], 
                               ondelete='CASCADE', name='fk_users_organization'),
                               
         # Constraints
         sa.CheckConstraint("role IN ('admin', 'manager', 'operator', 'viewer')", 
                           name='chk_user_role_valid'),
-        # RIMOSSO: failed_login_attempts >= 0 (ridondante)
+        sa.CheckConstraint('failed_login_attempts >= 0', 
+                          name='chk_failed_attempts_positive'),
+        sa.CheckConstraint(
+            'haccp_certificate_expiry IS NULL OR haccp_certificate_expiry > CURRENT_DATE',
+            name='chk_haccp_cert_future'
+        ),
     )
     
     # =====================================================

@@ -96,9 +96,8 @@ class TestUserCRUD:
         assert user.role == sample_user_data["role"]
         assert user.organization_id == sample_user_data["organization_id"]
         
-        # Verify password hashing
-        assert user.password_hash is not None
-        assert user.password_hash != original_password
+        assert user.hashed_password is not None 
+        assert user.hashed_password != original_password
         assert user.verify_password(original_password)
         
         # Verify timestamps
@@ -107,6 +106,22 @@ class TestUserCRUD:
         
         print(f"✅ User created with ID: {user.id}")
         print(f"✅ Password hash working correctly!")
+
+    def test_update_user_password(self, user_repository, created_user):
+        """Test updating user password"""
+        # Arrange
+        new_password = "NewSecurePassword456!"
+        old_password_hash = created_user.hashed_password  
+        
+        # Act
+        updated_user = user_repository.update(created_user.id, {"password": new_password})
+        
+        # Assert
+        assert updated_user.hashed_password != old_password_hash
+        assert updated_user.verify_password(new_password) == True
+        assert updated_user.verify_password("SecurePassword123!") == False
+        
+        print(f"✅ Password update working correctly")
     
     def test_get_by_id(self, user_repository, created_user):
         """Test getting user by ID"""
@@ -196,22 +211,6 @@ class TestUserCRUD:
         assert updated_user.organization_id == created_user.organization_id
         
         print(f"✅ User updated successfully")
-    
-    def test_update_user_password(self, user_repository, created_user):
-        """Test updating user password"""
-        # Arrange
-        new_password = "NewSecurePassword456!"
-        old_password_hash = created_user.password_hash
-        
-        # Act
-        updated_user = user_repository.update(created_user.id, {"password": new_password})
-        
-        # Assert
-        assert updated_user.password_hash != old_password_hash
-        assert updated_user.verify_password(new_password) == True
-        assert updated_user.verify_password("SecurePassword123!") == False
-        
-        print(f"✅ Password update working correctly")
     
     def test_update_nonexistent_user(self, user_repository):
         """Test updating non-existent user"""
