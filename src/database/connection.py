@@ -1,14 +1,13 @@
 # src/database/connection.py
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
-from sqlalchemy.pool import StaticPool
 from sqlalchemy.ext.asyncio import (
     create_async_engine,
     async_sessionmaker,
     AsyncSession,
 )
 import os
-from typing import Generator, AsyncGenerator
+from typing import AsyncGenerator
 
 # Database URL construction
 def get_database_url() -> str:
@@ -19,8 +18,9 @@ def get_database_url() -> str:
     DB_PORT = os.getenv("DB_PORT", "5432")
     DB_NAME = os.getenv("DB_NAME", "icepulse")
     
-    # Use asyncpg for production, psycopg2 for development
-    driver = "postgresql+asyncpg" if os.getenv("ENVIRONMENT") == "production" else "postgresql+psycopg2"
+    # Use asyncpg for production-like environments, psycopg2 otherwise
+    env = os.getenv("ENVIRONMENT", "dev").lower()
+    driver = "postgresql+asyncpg" if env in ("prod", "production") else "postgresql+psycopg2"
     
     return f"{driver}://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
@@ -79,29 +79,12 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
         finally:
             db.close()
 
-# Context manager for manual DB operations
-class DatabaseSession:
-    """Context manager for database sessions"""
-    
-    def __init__(self):
-        self.db = SessionLocal()
-    
-    def __enter__(self):
-        return self.db
-    
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_type:
-            self.db.rollback()
-        else:
-            self.db.commit()
-        self.db.close()
-
 # Health check function
 def check_database_connection() -> bool:
-    """Test database connectivity"""
+    """Simple database connectivity test"""
     try:
         with engine.connect() as conn:
-            conn.execute()
+            conn.execute("SELECT 1")
         return True
     except Exception as e:
         print(f"Database connection failed: {e}")
