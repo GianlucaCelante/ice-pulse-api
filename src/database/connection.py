@@ -2,8 +2,13 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.pool import StaticPool
+from sqlalchemy.ext.asyncio import (
+    create_async_engine,
+    async_sessionmaker,
+    AsyncSession,
+)
 import os
-from typing import Generator
+from typing import Generator, AsyncGenerator
 
 # Database URL construction
 def get_database_url() -> str:
@@ -22,34 +27,57 @@ def get_database_url() -> str:
 # Database engine
 DATABASE_URL = get_database_url()
 
-engine = create_engine(
-    DATABASE_URL,
-    # Connection pool settings
-    pool_size=10,
-    max_overflow=20,
-    pool_pre_ping=True,
-    pool_recycle=3600,  # Recycle connections after 1 hour
-    echo=os.getenv("DB_ECHO", "false").lower() == "true"  # SQL logging for debug
-)
+# Create async engine when using asyncpg driver
+USE_ASYNC = DATABASE_URL.startswith("postgresql+asyncpg")
 
-# Session factory
-SessionLocal = sessionmaker(
-    autocommit=False,
-    autoflush=False,
-    bind=engine
-)
+if USE_ASYNC:
+    engine = create_async_engine(
+        DATABASE_URL,
+        pool_size=10,
+        max_overflow=20,
+        pool_pre_ping=True,
+        pool_recycle=3600,
+        echo=os.getenv("DB_ECHO", "false").lower() == "true",
+    )
+else:
+    engine = create_engine(
+        DATABASE_URL,
+        pool_size=10,
+        max_overflow=20,
+        pool_pre_ping=True,
+        pool_recycle=3600,
+        echo=os.getenv("DB_ECHO", "false").lower() == "true",
+    )
+
+# Session factories
+if USE_ASYNC:
+    AsyncSessionLocal = async_sessionmaker(
+        bind=engine,
+        expire_on_commit=False,
+        class_=AsyncSession,
+    )
+else:
+    SessionLocal = sessionmaker(
+        autocommit=False,
+        autoflush=False,
+        bind=engine,
+    )
 
 # Base class for models
 Base = declarative_base()
 
 # Dependency for FastAPI
-def get_db() -> Generator:
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """Database dependency for FastAPI"""
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+    if USE_ASYNC:
+        async with AsyncSessionLocal() as session:
+            yield session
+    else:
+        db = SessionLocal()
+        try:
+            yield db  # type: ignore[arg-type]
+        finally:
+            db.close()
 
 # Context manager for manual DB operations
 class DatabaseSession:
